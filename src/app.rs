@@ -433,15 +433,30 @@ impl VoxKeyApp {
         action
     }
 
-    fn update_overlay_window(&mut self, ctx: &egui::Context) {
-        if !self.overlay_configured {
-            self.configure_attempts += 1;
-            self.overlay_configured = platform::configure_overlay_window();
-            if !self.overlay_configured && self.configure_attempts < 100 {
-                ctx.request_repaint_after(Duration::from_millis(100));
+    fn configure_overlay(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if self.overlay_configured {
+            return;
+        }
+
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = frame.window_handle() {
+            if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+                let hwnd = windows::Win32::Foundation::HWND(
+                    win32.hwnd.get() as *mut std::ffi::c_void,
+                );
+                platform::configure_overlay_window(hwnd);
+                self.overlay_configured = true;
+                return;
             }
         }
 
+        self.configure_attempts += 1;
+        if self.configure_attempts < 100 {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    fn update_overlay_window(&mut self, ctx: &egui::Context) {
         let desired_width = self.overlay.desired_width(ctx);
         if !self.overlay_os_visible {
             self.overlay_width = desired_width;
@@ -468,8 +483,6 @@ impl VoxKeyApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             self.overlay_os_visible = true;
             self.overlay_sent_width = width;
-            self.overlay_configured = self.overlay_configured
-                || platform::configure_overlay_window();
             ctx.request_repaint();
         } else if self.overlay_os_visible
             && (self.overlay_width - self.overlay_sent_width).abs() > 1.0
@@ -492,11 +505,12 @@ impl VoxKeyApp {
 }
 
 impl eframe::App for VoxKeyApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().clamp(0.0, 0.05);
         self.last_frame = now;
 
+        self.configure_overlay(ctx, frame);
         self.process_events(ctx);
         if self.exiting {
             return;

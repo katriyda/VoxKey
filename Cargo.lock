@@ -3046,6 +3046,7 @@ dependencies = [
  "cpal",
  "eframe",
  "egui",
+ "raw-window-handle",
  "reqwest",
  "serde",
  "serde_json",

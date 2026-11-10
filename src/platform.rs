@@ -17,16 +17,17 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallNextHookEx, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW,
-    GetCursorPos, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW,
-    PostQuitMessage, PostThreadMessageW, RegisterClassW, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu,
-    TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HICON, HMENU,
-    IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
-    MENU_ITEM_FLAGS, MSG, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos,
+    GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW, PostQuitMessage,
+    PostThreadMessageW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu, TranslateMessage,
+    UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HICON, HMENU, IDC_ARROW,
+    IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MENU_ITEM_FLAGS, MSG,
+    SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WM_COMMAND,
+    WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NULL, WM_QUIT,
+    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW,
 };
 
 use crate::config::Language;
@@ -687,20 +688,26 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 /// Marks the hidden-by-default overlay window as non-activating. Call it while
 /// the overlay is still hidden, so showing it never steals focus from the app
 /// receiving dictated text.
-pub fn configure_overlay_window() -> bool {
-    let title = wide("VoxKey Overlay");
-    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
-        Ok(hwnd) => hwnd,
-        Err(_) => return false,
-    };
+pub fn configure_overlay_window(hwnd: HWND) {
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let new_style = style | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
+        let new_style = (style
+            | (WS_EX_NOACTIVATE.0 as isize)
+            | (WS_EX_TOOLWINDOW.0 as isize))
+            & !(WS_EX_APPWINDOW.0 as isize);
         if new_style != style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
         }
     }
-    true
 }
 
 /// Primary monitor work area in physical pixels: (left, top, width, height).
