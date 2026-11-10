@@ -1,0 +1,40 @@
+[package]
+name = "voxkey"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Hold-to-talk, local-first voice input for Windows"
+license = "MIT"
+repository = "https://github.com/katriyda/VoxKey"
+
+[[bin]]
+name = "VoxKey"
+path = "src/main.rs"
+
+[dependencies]
+cpal = "0.16"
+eframe = { version = "0.32.3", default-features = false, features = ["default_fonts", "glow"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sherpa-onnx = "2.0.1"
+tokio = { version = "1", features = ["rt", "time", "fs", "io-util", "net"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security_Cryptography",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
