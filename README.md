@@ -45,6 +45,7 @@ VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住�
 | --- | --- | --- |
 | 设置文件 | `%APPDATA%\VoxKey\config.json` | `VOXKEY_DATA_DIR` |
 | 模型缓存 | `%LOCALAPPDATA%\VoxKey\models\sensevoice-int8\` | `VOXKEY_MODEL_DIR` |
+| 错误日志 | `%APPDATA%\VoxKey\voxkey.log` | `VOXKEY_DATA_DIR` |
 
 配置示例（API Key 实际以 `api_key_enc` 密文存储，不会出现明文）：
 
@@ -145,6 +146,37 @@ src/zh.rs          简体→繁体单字转换
 src/hotkey.rs      快捷键解析
 ```
 
+## 验证状态（2026-11-10）
+
+最终 Release 产物由 GitHub Actions 的 `windows-2022` Runner 构建，提交 `cfec8ec`，运行
+[Build VoxKey #42804184486](https://github.com/katriyda/VoxKey/actions/runs/42804184486) 全部通过：
+
+| 检查 | 结果 |
+| --- | --- |
+| `cargo test --release --locked` | ✅ 17 个单元测试全部通过 |
+| `cargo build --release --locked` | ✅ |
+| `dumpbin /dependents` 检查 | ✅ 没有 onnxruntime / sherpa / VCRUNTIME / MSVCP 依赖 |
+| `VoxKey.exe --version` 冒烟测试 | ✅ |
+| 单文件 artifact 上传 | ✅ `VoxKey.exe`，约 40 MB |
+
+最终 exe SHA-256：
+
+```text
+73f3c4a8d05160e01051c1b868dfdd4d7abc00b64e75078970be2e951aaff23a
+```
+
+在开发机上还做了以下**有限**运行时验证（不是完整端到端测试）：
+
+- Windows 启动成功，悬浮窗窗口出现；
+- 悬浮窗扩展样式为 `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，没有 `WS_EX_APPWINDOW`，显示后未成为前台窗口；
+- 悬浮窗尺寸/位置为主屏底部居中（实测 339×92，位于工作区底部居中）；
+- 使用 rustls 的模型下载实际开始写入（8 秒内已下载约 15 MB `.part`）；
+- 进程保持运行，错误会写入 `%APPDATA%\VoxKey\voxkey.log`。
+
+**尚未实测**：真实麦克风录音与识别质量、物理快捷键（尤其各机型 Fn 行为）、把文字注入真实编辑器/WPS/浏览器及中文输入法状态、托盘菜单点击和 Settings 窗口交互、真实 LLM 端点调用、干净 Windows 10 机器上的首次安装行为。
+
+当前 Agent 运行环境是受限制/提权的桌面会话；`Shell_NotifyIconW` 返回 Win32 错误 5（拒绝访问），因此这里无法端到端验证托盘。普通非提权的 Windows 用户会话应可正常显示托盘；如果托盘不出现，请确认 Explorer 正在运行，并避免以管理员身份启动。
+
 ## 已知限制（如实说明）
 
 - **Fn 键**：见上文。Windows 全局钩子无法可靠监听纯硬件 Fn，默认右 Ctrl。
@@ -154,6 +186,8 @@ src/hotkey.rs      快捷键解析
 - **自动下载网络**：模型优先从 Hugging Face 下载，失败时回退 hf-mirror。若两个镜像都不可达，首次运行会显示错误；可手动按上述目录放置 `model.int8.onnx` 与 `tokens.txt` 后重启。
 - **运行时验证**：构建与单元测试在 GitHub Actions（Windows）上执行；真实麦克风、托盘、焦点保持、中文输入法兼容性和各机型的 Fn 行为需要在目标 Windows 设备上实测。仓库会明确记录已验证和未验证项。
 - **快捷键冲突**：全局钩子只能观察，不能在所有场景下阻止快捷键被当前应用同时接收；默认右 Ctrl 通常无冲突，若自定义为常用组合请自行注意。
+- **代码签名**：当前 Release 未做 Authenticode 签名，Windows SmartScreen 可能提示“未知发布者”；可自行校验上面的 SHA-256。
+- **托盘与提权**：Windows 的 UIPI 机制会阻止提权进程向普通权限的 Explorer 添加托盘图标。请以普通用户身份运行 VoxKey。
 
 ## 第三方资源与许可
 
