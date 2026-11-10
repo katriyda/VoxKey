@@ -19,3 +19,23 @@
   - GitHub 私有仓库 https://github.com/katriyda/VoxKey
 - 结果: 完成。17 个单元测试通过；Actions 构建与 dumpbin 单文件校验通过。真实麦克风、IME/焦点注入、托盘交互与 LLM 端点未做端到端实测。
 - meta: commit=31a814e files=src/app.rs,src/engine.rs,src/platform.rs,src/overlay.rs,src/clipboard.rs,src/llm.rs,.github/workflows/build.yml
+
+## 2026-11-10 20:42 — 本机端到端实测与热键/静音修复
+- session: s-20261110-vk01
+- agent: deepseek-harness (deepseek-v4.1-flash-eco)
+- 目录: C:\\Users\\katri\\code\\VoxKey
+- 目标: 在当前 Windows 机器上真实测试 VoxKey，并修复实测暴露的问题
+- 做了什么:
+  - 发现本会话进程为 Low Mandatory Level，SendInput 被 UIPI 阻挡；改用底层 keybd_event 并由低完整性测试窗口取得前台后驱动热键
+  - 实测模型下载、SenseVoice 五语种官方测试音频、Realtek 麦克风阵列真实声学回放识别
+  - 发现隐藏 winit 窗口空闲约 10 秒后不再处理跨线程 repaint，导致第一次热键失效；改为窗口常驻可见但完全透明、鼠标穿透
+  - 发现静音/噪声会被识别成“我。”或“。”并注入；新增 RMS 门限与“单字符+低能量”拒绝逻辑，并过滤纯标点
+  - 完成完整链路实测：右 Ctrl → 录音 → 识别“开饭时间早上9点至下午5点。” → 写入焦点文本框 → 剪贴板哨兵恢复
+  - 用 PrintWindow 验证录音时悬浮窗内容（波形与“正在聆听…”），并确认 329×92、底部居中、NoActivate/ToolWindow 样式
+  - 清理所有测试钩子/探针，重新跑 cargo fmt/test/clippy，推送并由 Actions 重建
+- 产出:
+  - 修复后的 src/main.rs、src/app.rs、src/engine.rs、README.md
+  - dist/VoxKey.exe（Actions run 42817193269，SHA-256 4b75fe65...）
+  - GitHub 远端 commit fdbb448
+- 结果: 完成。19 个单元测试与 Clippy 通过；本机端到端语音注入链路通过。物理 Fn、托盘、Settings、LLM 端点与真实人声仍未实测。
+- meta: commit=fdbb448 files=src/app.rs,src/engine.rs,src/main.rs,README.md
