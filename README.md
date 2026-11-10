@@ -160,10 +160,10 @@ src/hotkey.rs      快捷键解析
 | `VoxKey.exe --version` 冒烟测试 | ✅ |
 | 单文件 artifact 上传 | ✅ `VoxKey.exe`，约 40 MB |
 
-最终 exe SHA-256：
+最终 exe SHA-256（Actions run 42817193269，源码 commit `fdbb448`）：
 
 ```text
-73f3c4a8d05160e01051c1b868dfdd4d7abc00b64e75078970be2e951aaff23a
+4b75fe6544c553b9b6aef251c843936893f3a0c47ddcb2741e197af6cdefbc5e
 ```
 
 在本机（当前受限的低完整性桌面会话）做过以下运行时验证：
