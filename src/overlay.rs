@@ -206,7 +206,7 @@ impl Overlay {
                     capsule,
                     radius,
                     Stroke::new(
-                        1.0,
+                        1.0_f32,
                         fade(Color32::from_rgba_unmultiplied(255, 255, 255, 30), animate),
                     ),
                     StrokeKind::Inside,
@@ -233,7 +233,7 @@ impl Overlay {
                         Pos2::new(divider_x, capsule.bottom() - 22.0),
                     ],
                     Stroke::new(
-                        1.0,
+                        1.0_f32,
                         fade(Color32::from_rgba_unmultiplied(255, 255, 255, 20), animate),
                     ),
                 );

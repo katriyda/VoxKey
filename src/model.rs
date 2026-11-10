@@ -28,6 +28,7 @@ pub fn model_dir() -> PathBuf {
     PathBuf::from(".voxkey-models")
 }
 
+#[allow(dead_code)]
 pub fn model_paths() -> (PathBuf, PathBuf) {
     let dir = model_dir();
     (dir.join(MODEL_FILE), dir.join(TOKENS_FILE))

@@ -24,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HICON, HMENU,
     IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
     MENU_ITEM_FLAGS, MSG, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
+    TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
     WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN,
     WM_SYSKEYUP, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
@@ -74,11 +74,13 @@ impl Platform {
             let tx = tx.clone();
             let ctx = ctx.clone();
             let thread_id = Arc::clone(&hook_thread_id);
+            let spawn_tx = tx.clone();
+            let error_tx = tx.clone();
             std::thread::Builder::new()
                 .name("voxkey-hotkey".to_string())
-                .spawn(move || run_hook(thread_id, ctx, tx))
-                .map_err(|e| {
-                    let _ = tx.send(UiEvent::PlatformError(format!(
+                .spawn(move || run_hook(thread_id, ctx, spawn_tx))
+                .map_err(move |e| {
+                    let _ = error_tx.send(UiEvent::PlatformError(format!(
                         "无法启动快捷键线程: {e}"
                     )));
                 })
@@ -90,11 +92,13 @@ impl Platform {
             let ctx = ctx.clone();
             let state = Arc::clone(&tray_state);
             let thread_id = Arc::clone(&tray_thread_id);
+            let spawn_tx = tx.clone();
+            let error_tx = tx.clone();
             std::thread::Builder::new()
                 .name("voxkey-tray".to_string())
-                .spawn(move || run_tray(thread_id, ctx, tx, state, icon_bytes))
-                .map_err(|e| {
-                    let _ = tx.send(UiEvent::PlatformError(format!(
+                .spawn(move || run_tray(thread_id, ctx, spawn_tx, state, icon_bytes))
+                .map_err(move |e| {
+                    let _ = error_tx.send(UiEvent::PlatformError(format!(
                         "无法启动托盘线程: {e}"
                     )));
                 })
@@ -300,7 +304,7 @@ fn run_hook(
 const TRAY_CLASS: &str = "VoxKeyTrayWindow";
 const TRAY_WINDOW_TITLE: &str = "VoxKey Tray";
 const TRAY_UID: u32 = 1;
-const TRAY_CALLBACK: u32 = WM_APP + 1;
+const TRAY_CALLBACK: u32 = 0x8001; // WM_APP + 1
 
 const ID_LANG_BASE: u32 = 1;
 const ID_TOGGLE_LLM: u32 = 20;

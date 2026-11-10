@@ -57,15 +57,6 @@ impl Language {
         }
     }
 
-    pub fn short_label(self) -> &'static str {
-        match self {
-            Language::ZhCn => "ZH",
-            Language::En => "EN",
-            Language::ZhTw => "TW",
-            Language::Ja => "JA",
-            Language::Ko => "KO",
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

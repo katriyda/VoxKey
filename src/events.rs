@@ -37,5 +37,4 @@ pub enum UiEvent {
     Engine(EngineEvent),
     LlmTestResult(Result<String, String>),
     PlatformError(String),
-    Quit,
 }

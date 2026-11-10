@@ -109,7 +109,6 @@ impl VoxKeyApp {
                         Some(Duration::from_secs(7)),
                     );
                 }
-                UiEvent::Quit => self.request_quit(ctx),
             }
         }
     }

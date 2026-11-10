@@ -42,7 +42,7 @@ impl Recorder {
                 let err_fn = make_error_callback(Arc::clone(&error), device_name.clone());
                 device.build_input_stream(
                     &config,
-                    move |data: &[f32], _| push_mono(data, channels, buffer, level, |s| s),
+                    move |data: &[f32], _| push_mono(data, channels, &buffer, &level, |s| s),
                     err_fn,
                     None,
                 )
@@ -54,7 +54,7 @@ impl Recorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[i16], _| {
-                        push_mono(data, channels, buffer, level, |s| s as f32 / 32768.0)
+                        push_mono(data, channels, &buffer, &level, |s| s as f32 / 32768.0)
                     },
                     err_fn,
                     None,
@@ -67,7 +67,7 @@ impl Recorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[u16], _| {
-                        push_mono(data, channels, buffer, level, |s| {
+                        push_mono(data, channels, &buffer, &level, |s| {
                             (s as f32 - 32768.0) / 32768.0
                         })
                     },
@@ -82,7 +82,7 @@ impl Recorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[i32], _| {
-                        push_mono(data, channels, buffer, level, |s| {
+                        push_mono(data, channels, &buffer, &level, |s| {
                             s as f32 / 2_147_483_648.0
                         })
                     },
@@ -97,7 +97,7 @@ impl Recorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[u8], _| {
-                        push_mono(data, channels, buffer, level, |s| {
+                        push_mono(data, channels, &buffer, &level, |s| {
                             (s as f32 - 128.0) / 128.0
                         })
                     },
@@ -174,8 +174,8 @@ fn make_error_callback(
 fn push_mono<T, F>(
     data: &[T],
     channels: usize,
-    buffer: Arc<Mutex<Vec<f32>>>,
-    level: Arc<AtomicU32>,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+    level: &Arc<AtomicU32>,
     to_float: F,
 ) where
     T: Copy,
