@@ -87,7 +87,7 @@ impl Overlay {
     }
 
     pub fn is_fading(&self) -> bool {
-        self.closing || self.alpha > 0.001
+        self.alpha > 0.001
     }
 
     pub fn is_visible(&self) -> bool {
@@ -129,6 +129,7 @@ impl Overlay {
             if self.alpha <= 0.0 {
                 self.alpha = 0.0;
                 self.level = 0.0;
+                self.closing = false;
                 return true;
             }
         } else if !self.title.is_empty() || !self.detail.is_empty() {

@@ -210,13 +210,18 @@ pub fn format_label(trigger: u32, modifiers: u8, fn_alias: bool) -> String {
        0x30..=0x39 => None,
         _ => None,
     };
-    let key_label = key.unwrap_or_else(|| {
-        if (0x41..=0x5A).contains(&trigger) || (0x30..=0x39).contains(&trigger) {
-            char::from_u32(trigger).map(|c| c.to_string()).unwrap_or_default()
-        } else {
-            format!("VK 0x{trigger:02X}")
+    let key_label = match key {
+        Some(label) => label.to_string(),
+        None => {
+            if (0x41..=0x5A).contains(&trigger) || (0x30..=0x39).contains(&trigger) {
+                char::from_u32(trigger)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default()
+            } else {
+                format!("VK 0x{trigger:02X}")
+            }
         }
-    });
+    };
     if pushed {
         label.push_str(" + ");
     }

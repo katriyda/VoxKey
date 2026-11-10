@@ -313,6 +313,17 @@ impl VoxKeyApp {
         let settings_id = egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME);
         ctx.send_viewport_cmd_to(settings_id, egui::ViewportCommand::Close);
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+
+        // eframe normally tears itself down promptly after the root Close
+        // command. A hidden root viewport plus a transient secondary window can
+        // delay that shutdown on some Windows versions, so guarantee termination
+        // after all Win32 resources have already been cleaned up above.
+        let _ = std::thread::Builder::new()
+            .name("voxkey-exit".to_string())
+            .spawn(|| {
+                std::thread::sleep(Duration::from_millis(800));
+                std::process::exit(0);
+            });
     }
 
     fn save_settings(&mut self) {
@@ -525,11 +536,6 @@ impl eframe::App for VoxKeyApp {
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 0.0]
-    }
-
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.engine.shutdown();
-        self.platform.shutdown();
     }
 }
 

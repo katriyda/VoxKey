@@ -193,7 +193,12 @@ impl HookRuntime {
         let Ok(spec) = self.hotkey.lock().map(|guard| guard.clone()) else {
             return;
         };
-        let is_trigger = spec.matches_trigger(info.vkCode, info.scanCode);
+        // Fn keys usually never reach Windows. On devices that do expose Fn as
+        // F13 (or one of the related scan codes), accept it as an extra trigger
+        // even when the configured reliable fallback is a different key.
+        const VK_F13: u32 = 0x7C;
+        let fn_probe = info.vkCode == VK_F13 || matches!(info.scanCode, 0x64 | 0x65);
+        let is_trigger = spec.matches_trigger(info.vkCode, info.scanCode) || fn_probe;
 
         if down && is_trigger && !self.recording.load(Ordering::SeqCst) {
             let active = self.modifiers.load(Ordering::SeqCst);
@@ -303,10 +308,16 @@ const ID_SETTINGS: u32 = 30;
 const ID_EXIT: u32 = 40;
 
 struct TrayRuntime {
-    hwnd: HWND,
+    raw_hwnd: isize,
     ctx: egui::Context,
     tx: std::sync::mpsc::Sender<UiEvent>,
     state: Arc<Mutex<TrayState>>,
+}
+
+impl TrayRuntime {
+    fn hwnd(&self) -> HWND {
+        HWND(self.raw_hwnd as *mut c_void)
+    }
 }
 
 static TRAY_RUNTIME: OnceLock<Arc<TrayRuntime>> = OnceLock::new();
@@ -422,7 +433,7 @@ fn run_tray(
     }
 
     let runtime = Arc::new(TrayRuntime {
-        hwnd,
+        raw_hwnd: hwnd.0 as isize,
         ctx: ctx.clone(),
         tx: tx.clone(),
         state,
@@ -505,7 +516,7 @@ fn handle_tray_event(hwnd: HWND, event: TrayEvent) {
             );
         }
         TrayEvent::ShowMenu => {
-            if runtime.hwnd != hwnd {
+            if runtime.hwnd() != hwnd {
                 return;
             }
             show_tray_menu(runtime);
@@ -544,17 +555,17 @@ fn show_tray_menu(runtime: &TrayRuntime) {
     let mut point = POINT::default();
     unsafe {
         let _ = GetCursorPos(&mut point);
-        let _ = SetForegroundWindow(runtime.hwnd);
+        let _ = SetForegroundWindow(runtime.hwnd());
         let _ = TrackPopupMenu(
             menu,
             TRACK_POPUP_MENU_FLAGS(0x0002 | 0x0020),
             point.x,
             point.y,
             None,
-            runtime.hwnd,
+            runtime.hwnd(),
             None,
         );
-        let _ = PostMessageW(Some(runtime.hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(runtime.hwnd()), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
     }
 }

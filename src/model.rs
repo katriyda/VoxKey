@@ -142,7 +142,7 @@ async fn download_one(
     let part = destination.with_extension("part");
     let _ = tokio::fs::remove_file(&part).await;
 
-    let response = client
+    let mut response = client
         .get(url)
         .send()
         .await
