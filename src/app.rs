@@ -246,12 +246,8 @@ impl VoxKeyApp {
                 } else {
                     format!("{label} · {:.1} MB", downloaded as f64 / 1_000_000.0)
                 };
-                self.overlay.present(
-                    OverlayKind::Download,
-                    "正在下载本地语音模型",
-                    detail,
-                    None,
-                );
+                self.overlay
+                    .present(OverlayKind::Download, "正在下载本地语音模型", detail, None);
             }
             EngineEvent::RecordingStarted => {
                 self.overlay.kind = OverlayKind::Listening;
@@ -273,8 +269,7 @@ impl VoxKeyApp {
                 if !self.session_active {
                     return;
                 }
-                let title = if self.overlay.title.is_empty()
-                    || self.overlay.title == "正在聆听…"
+                let title = if self.overlay.title.is_empty() || self.overlay.title == "正在聆听…"
                 {
                     "正在识别…".to_string()
                 } else {
@@ -284,8 +279,12 @@ impl VoxKeyApp {
                     .present(OverlayKind::Working, title, "正在识别语音…", None);
             }
             EngineEvent::Refining => {
-                self.overlay
-                    .present(OverlayKind::Working, self.overlay.title.clone(), "LLM 纠错中…", None);
+                self.overlay.present(
+                    OverlayKind::Working,
+                    self.overlay.title.clone(),
+                    "LLM 纠错中…",
+                    None,
+                );
             }
             EngineEvent::Done { text, warning } => {
                 self.session_active = false;
@@ -476,8 +475,8 @@ impl VoxKeyApp {
         }
 
         if self.overlay.is_visible() && !self.overlay_os_visible {
-            let (left, top, work_w, work_h) = platform::primary_work_area()
-                .unwrap_or((0, 0, 1920, 1080));
+            let (left, top, work_w, work_h) =
+                platform::primary_work_area().unwrap_or((0, 0, 1920, 1080));
             let ppp = ctx.pixels_per_point();
             let width = self.overlay_width;
             let x = (left as f32 + (work_w as f32 - width * ppp) / 2.0) / ppp;
@@ -496,8 +495,8 @@ impl VoxKeyApp {
         } else if self.overlay_os_visible
             && (self.overlay_width - self.overlay_sent_width).abs() > 1.0
         {
-            let (left, top, work_w, work_h) = platform::primary_work_area()
-                .unwrap_or((0, 0, 1920, 1080));
+            let (left, top, work_w, work_h) =
+                platform::primary_work_area().unwrap_or((0, 0, 1920, 1080));
             let ppp = ctx.pixels_per_point();
             let width = self.overlay_width;
             let x = (left as f32 + (work_w as f32 - width * ppp) / 2.0) / ppp;
@@ -527,8 +526,9 @@ impl eframe::App for VoxKeyApp {
 
         let closed = self.overlay.advance(dt);
         if closed && self.overlay_os_visible {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.overlay_os_visible = false;
+            // The OS window stays visible (and fully transparent) so winit
+            // keeps processing hotkey repaint requests. Only the capsule
+            // content is hidden.
             self.previous_foreground = None;
         }
 
@@ -542,11 +542,9 @@ impl eframe::App for VoxKeyApp {
                 if platform::foreground_window() == Some(hwnd) {
                     if let Some(previous) = self.previous_foreground {
                         if previous != raw {
-                            platform::set_foreground_window(
-                                windows::Win32::Foundation::HWND(
-                                    previous as *mut std::ffi::c_void,
-                                ),
-                            );
+                            platform::set_foreground_window(windows::Win32::Foundation::HWND(
+                                previous as *mut std::ffi::c_void,
+                            ));
                         }
                     }
                 }
@@ -622,17 +620,14 @@ fn install_fonts_and_style(ctx: &egui::Context) {
     ctx.set_style(style);
 
     ctx.style_mut(|style| {
-        style.text_styles.insert(
-            egui::TextStyle::Body,
-            FontId::proportional(13.0),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Button,
-            FontId::proportional(13.0),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Small,
-            FontId::proportional(10.5),
-        );
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, FontId::proportional(13.0));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Button, FontId::proportional(13.0));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Small, FontId::proportional(10.5));
     });
 }

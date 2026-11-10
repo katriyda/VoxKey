@@ -51,7 +51,6 @@ impl Language {
             Language::Ko => "한국어",
         }
     }
-
 }
 
 #[derive(Clone, Debug)]
@@ -189,8 +188,8 @@ impl Config {
         fs::create_dir_all(&dir).map_err(|e| format!("无法创建配置目录: {e}"))?;
         let path = config_path();
         let tmp = path.with_extension("json.tmp");
-        let json = serde_json::to_string_pretty(&disk)
-            .map_err(|e| format!("无法序列化配置: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(&disk).map_err(|e| format!("无法序列化配置: {e}"))?;
         fs::write(&tmp, json).map_err(|e| format!("无法写入配置: {e}"))?;
 
         // std::fs::rename does not replace an existing file on Windows.
@@ -217,10 +216,7 @@ mod tests {
 
     #[test]
     fn language_serialization_is_stable() {
-        assert_eq!(
-            serde_json::to_string(&Language::ZhTw).unwrap(),
-            "\"zh-TW\""
-        );
+        assert_eq!(serde_json::to_string(&Language::ZhTw).unwrap(), "\"zh-TW\"");
         let lang: Language = serde_json::from_str("\"ja\"").unwrap();
         assert_eq!(lang, Language::Ja);
     }

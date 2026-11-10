@@ -1,0 +1,21 @@
+## 2026-11-10 19:12 — 创建 VoxKey Windows 原生语音输入法
+- session: s-20261110-vk01
+- agent: deepseek-harness (deepseek-v4.1-flash-eco)
+- 目录: C:\\Users\\katri\\code\\VoxKey
+- 目标: 完整实现 Rust/egui/sherpa-onnx 的 Windows 按住说话语音输入应用及 GitHub Actions 单文件构建
+- 做了什么:
+  - 搭建 Cargo 项目与模块架构，实现全局键盘钩子、Fn/F13 探测与自定义快捷键
+  - 集成 cpal 录音、16k 重采样、SenseVoice 本地识别、模型下载缓存与繁体转换
+  - 实现透明置顶胶囊悬浮窗、实时 RMS 波形、动态宽度与淡入淡出动画
+  - 实现剪贴板快照/恢复 + SendInput Ctrl+V，以及 with-no-activate 焦点保护
+  - 实现 OpenAI 兼容 LLM 保守纠错、DPAPI API Key 加密、托盘菜单和 Settings 窗口
+  - 编写 Windows-only GitHub Actions 构建/测试/依赖检查/Artifact/Release 流程
+  - 使用本地 cargo check/clippy/test 快速反馈；最终 Release exe 由 Actions 构建
+  - 对最终 exe 做有限运行时验证：悬浮窗、NoActivate 样式、位置、rustls 模型下载启动、错误日志
+- 产出:
+  - 完整项目源码、Cargo.lock、assets、README、LICENSE、NOTICE
+  - .github/workflows/build.yml
+  - dist/VoxKey.exe（Actions 构建，SHA-256 73f3c4a8...）
+  - GitHub 私有仓库 https://github.com/katriyda/VoxKey
+- 结果: 完成。17 个单元测试通过；Actions 构建与 dumpbin 单文件校验通过。真实麦克风、IME/焦点注入、托盘交互与 LLM 端点未做端到端实测。
+- meta: commit=31a814e files=src/app.rs,src/engine.rs,src/platform.rs,src/overlay.rs,src/clipboard.rs,src/llm.rs,.github/workflows/build.yml

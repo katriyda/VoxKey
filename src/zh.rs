@@ -21,9 +21,12 @@ fn table() -> &'static HashMap<char, char> {
             };
             let mut from_chars = from.chars();
             let mut to_chars = to.chars();
-            if let (Some(from), Some(to), None, None) =
-                (from_chars.next(), to_chars.next(), from_chars.next(), to_chars.next())
-            {
+            if let (Some(from), Some(to), None, None) = (
+                from_chars.next(),
+                to_chars.next(),
+                from_chars.next(),
+                to_chars.next(),
+            ) {
                 map.insert(from, to);
             }
         }

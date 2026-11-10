@@ -41,7 +41,8 @@ pub fn ensure_model(
     progress: &mut dyn FnMut(u64, u64, &str),
 ) -> Result<PathBuf, String> {
     let dir = model_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建模型缓存目录 {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("无法创建模型缓存目录 {}: {e}", dir.display()))?;
     let model = dir.join(MODEL_FILE);
     let tokens = dir.join(TOKENS_FILE);
 
@@ -59,15 +60,8 @@ pub fn ensure_model(
     runtime.block_on(async {
         if !valid_file(&model, MODEL_SIZE) {
             let _ = std::fs::remove_file(&model);
-            download_with_fallbacks(
-                MODEL_FILE,
-                MODEL_SIZE,
-                &model,
-                total,
-                &mut done,
-                progress,
-            )
-            .await?;
+            download_with_fallbacks(MODEL_FILE, MODEL_SIZE, &model, total, &mut done, progress)
+                .await?;
         }
         if !valid_file(&tokens, TOKENS_SIZE) {
             let _ = std::fs::remove_file(&tokens);
@@ -167,7 +161,11 @@ async fn download_one(
     let base_done = *done;
 
     progress(base_done, total, "下载语音模型");
-    while let Some(chunk) = response.chunk().await.map_err(|e| format!("下载中断: {e}"))? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("下载中断: {e}"))?
+    {
         file.write_all(&chunk)
             .await
             .map_err(|e| format!("写入模型失败: {e}"))?;
@@ -179,7 +177,9 @@ async fn download_one(
             last_report = Instant::now();
         }
     }
-    file.flush().await.map_err(|e| format!("写入模型失败: {e}"))?;
+    file.flush()
+        .await
+        .map_err(|e| format!("写入模型失败: {e}"))?;
     drop(file);
 
     if received != expected_size {

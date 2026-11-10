@@ -93,8 +93,8 @@ pub fn parse_hotkey(input: &str) -> Result<HotkeySpec, String> {
             continue;
         }
 
-        let (trigger, fn_alias) = trigger_code(&lower)
-            .ok_or_else(|| format!("不支持的按键: {token}"))?;
+        let (trigger, fn_alias) =
+            trigger_code(&lower).ok_or_else(|| format!("不支持的按键: {token}"))?;
         pending = Some(HotkeySpec {
             trigger,
             modifiers,
@@ -206,8 +206,8 @@ pub fn format_label(trigger: u32, modifiers: u8, fn_alias: bool) -> String {
         VK_F12 => Some("F12"),
         VK_F13 if fn_alias => Some("Fn / F13"),
         VK_F13 => Some("F13"),
-       0x41..=0x5A => None,
-       0x30..=0x39 => None,
+        0x41..=0x5A => None,
+        0x30..=0x39 => None,
         _ => None,
     };
     let key_label = match key {

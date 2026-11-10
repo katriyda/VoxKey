@@ -149,11 +149,7 @@ impl Overlay {
         };
         let main_width = ctx.fonts(|fonts| {
             fonts
-                .layout_no_wrap(
-                    main.to_string(),
-                    FontId::proportional(14.5),
-                    Color32::WHITE,
-                )
+                .layout_no_wrap(main.to_string(), FontId::proportional(14.5), Color32::WHITE)
                 .size()
                 .x
         });
@@ -268,11 +264,7 @@ impl Overlay {
                 } else {
                     text_left
                 };
-                clipped_painter.galley(
-                    Pos2::new(main_x, main_pos.y),
-                    main_galley,
-                    main_render,
-                );
+                clipped_painter.galley(Pos2::new(main_x, main_pos.y), main_galley, main_render);
 
                 if has_detail {
                     let detail_color = Color32::from_rgb(151, 160, 177);
@@ -298,11 +290,7 @@ impl Overlay {
 
                 // Tiny state dot after the detail or at the right edge.
                 let dot_center = Pos2::new(capsule.right() - 22.0, capsule.center().y);
-                painter.circle_filled(
-                    dot_center,
-                    3.0,
-                    fade(accent, animate * 0.9),
-                );
+                painter.circle_filled(dot_center, 3.0, fade(accent, animate * 0.9));
             });
     }
 
@@ -317,10 +305,7 @@ impl Overlay {
         for (index, height) in self.bars.iter().enumerate() {
             let x = center.x + index as f32 * 9.0 - 22.0;
             let h = height * animate.clamp(0.35, 1.0);
-            let bar = Rect::from_center_size(
-                Pos2::new(x, center.y),
-                Vec2::new(5.0, h.max(4.0)),
-            );
+            let bar = Rect::from_center_size(Pos2::new(x, center.y), Vec2::new(5.0, h.max(4.0)));
             let color = if index == 2 {
                 accent
             } else {

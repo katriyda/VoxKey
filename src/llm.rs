@@ -242,8 +242,12 @@ pub async fn test_connection(config: &RefineConfig) -> Result<String, String> {
 }
 
 fn parse_chat_content(body: &str) -> Result<String, String> {
-    let parsed: ChatResponse = serde_json::from_str(body)
-        .map_err(|_| format!("响应不是有效的 Chat Completions JSON: {}", truncate_chars(body, 180)))?;
+    let parsed: ChatResponse = serde_json::from_str(body).map_err(|_| {
+        format!(
+            "响应不是有效的 Chat Completions JSON: {}",
+            truncate_chars(body, 180)
+        )
+    })?;
     parsed
         .choices
         .into_iter()
@@ -336,9 +340,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
         current[0] = i + 1;
         for (j, cb) in b.iter().enumerate() {
             let substitution = previous[j] + usize::from(ca != cb);
-            current[j + 1] = (previous[j + 1] + 1)
-                .min(current[j] + 1)
-                .min(substitution);
+            current[j + 1] = (previous[j + 1] + 1).min(current[j] + 1).min(substitution);
         }
         std::mem::swap(&mut previous, &mut current);
     }
@@ -378,7 +380,10 @@ mod tests {
         let original = "我觉得这个方案很好，我们可以继续推进。";
         let rewritten = "这个方案非常优秀，值得推进。";
         assert_eq!(guard_refinement(original, rewritten), original);
-        assert_eq!(guard_refinement("帮我看一下。", "帮我看一下。"), "帮我看一下。");
+        assert_eq!(
+            guard_refinement("帮我看一下。", "帮我看一下。"),
+            "帮我看一下。"
+        );
         assert_eq!(
             guard_refinement("用配森写脚本", "用 Python 写脚本"),
             "用 Python 写脚本"

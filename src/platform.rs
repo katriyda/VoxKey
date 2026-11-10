@@ -14,14 +14,13 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallNextHookEx, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos,
-    GetForegroundWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW, PostQuitMessage,
-    PostThreadMessageW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
+    GetForegroundWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW,
+    PostQuitMessage, PostThreadMessageW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu, TranslateMessage,
     UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HICON, HMENU, IDC_ARROW,
     IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MENU_ITEM_FLAGS, MSG,
@@ -83,9 +82,8 @@ impl Platform {
                 .name("voxkey-hotkey".to_string())
                 .spawn(move || run_hook(thread_id, ctx, spawn_tx))
                 .map_err(move |e| {
-                    let _ = error_tx.send(UiEvent::PlatformError(format!(
-                        "无法启动快捷键线程: {e}"
-                    )));
+                    let _ =
+                        error_tx.send(UiEvent::PlatformError(format!("无法启动快捷键线程: {e}")));
                 })
                 .ok()
         };
@@ -101,9 +99,7 @@ impl Platform {
                 .name("voxkey-tray".to_string())
                 .spawn(move || run_tray(thread_id, ctx, spawn_tx, state, icon_bytes))
                 .map_err(move |e| {
-                    let _ = error_tx.send(UiEvent::PlatformError(format!(
-                        "无法启动托盘线程: {e}"
-                    )));
+                    let _ = error_tx.send(UiEvent::PlatformError(format!("无法启动托盘线程: {e}")));
                 })
                 .ok()
         };
@@ -223,11 +219,7 @@ impl HookRuntime {
     }
 }
 
-unsafe extern "system" fn keyboard_hook_proc(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         if let Some(runtime) = HOOK_RUNTIME.get() {
             let info = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
@@ -237,11 +229,7 @@ unsafe extern "system" fn keyboard_hook_proc(
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
-fn run_hook(
-    thread_id: Arc<AtomicU32>,
-    ctx: egui::Context,
-    tx: std::sync::mpsc::Sender<UiEvent>,
-) {
+fn run_hook(thread_id: Arc<AtomicU32>, ctx: egui::Context, tx: std::sync::mpsc::Sender<UiEvent>) {
     unsafe {
         thread_id.store(GetCurrentThreadId(), Ordering::Release);
     }
@@ -260,12 +248,7 @@ fn run_hook(
     let hinstance = HINSTANCE::from(module);
 
     let hook = match unsafe {
-        SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            Some(keyboard_hook_proc),
-            Some(hinstance),
-            0,
-        )
+        SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), Some(hinstance), 0)
     } {
         Ok(hook) => hook,
         Err(e) => {
@@ -552,11 +535,7 @@ fn show_tray_menu(runtime: &TrayRuntime) {
         Ok(menu) => menu,
         Err(_) => return,
     };
-    let state = runtime
-        .state
-        .lock()
-        .map(|guard| *guard)
-        .unwrap_or_default();
+    let state = runtime.state.lock().map(|guard| *guard).unwrap_or_default();
 
     append_menu(menu, 0x1, 0, "VoxKey", false); // grayed header
     append_menu(menu, 0x800, 0, "", false); // separator
@@ -570,7 +549,13 @@ fn show_tray_menu(runtime: &TrayRuntime) {
         );
     }
     append_menu(menu, 0x800, 0, "", false);
-    append_menu(menu, 0, ID_TOGGLE_LLM as usize, "LLM 纠错", state.llm_enabled);
+    append_menu(
+        menu,
+        0,
+        ID_TOGGLE_LLM as usize,
+        "LLM 纠错",
+        state.llm_enabled,
+    );
     append_menu(menu, 0, ID_SETTINGS as usize, "设置…", false);
     append_menu(menu, 0x800, 0, "", false);
     append_menu(menu, 0, ID_EXIT as usize, "退出", false);
@@ -631,11 +616,7 @@ fn handle_menu_command(id: u32) {
             );
         }
         ID_EXIT => {
-            send_ui(
-                &runtime.tx,
-                &runtime.ctx,
-                UiEvent::Tray(TrayAction::Quit),
-            );
+            send_ui(&runtime.tx, &runtime.ctx, UiEvent::Tray(TrayAction::Quit));
         }
         _ => {}
     }
@@ -663,13 +644,23 @@ fn icon_from_ico(bytes: &[u8]) -> Option<HICON> {
         if entry + 16 > bytes.len() {
             break;
         }
-        let width = if bytes[entry] == 0 { 256u32 } else { bytes[entry] as u32 };
+        let width = if bytes[entry] == 0 {
+            256u32
+        } else {
+            bytes[entry] as u32
+        };
         let size = read_u32(bytes, entry + 8)? as usize;
         let offset = read_u32(bytes, entry + 12)? as usize;
         if offset + size > bytes.len() {
             continue;
         }
-        let score = if width == 32 { 100 } else if width <= 64 { 50 } else { 10 };
+        let score = if width == 32 {
+            100
+        } else if width <= 64 {
+            50
+        } else {
+            10
+        };
         if best.map(|(s, _, _)| score > s).unwrap_or(true) {
             best = Some((score, offset, size));
         }
@@ -709,9 +700,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 pub fn configure_overlay_window(hwnd: HWND) {
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let new_style = (style
-            | (WS_EX_NOACTIVATE.0 as isize)
-            | (WS_EX_TOOLWINDOW.0 as isize))
+        let new_style = (style | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize))
             & !(WS_EX_APPWINDOW.0 as isize);
         if new_style != style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);

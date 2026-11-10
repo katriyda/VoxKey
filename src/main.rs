@@ -33,7 +33,12 @@ fn main() {
             .with_resizable(false)
             .with_decorations(false)
             .with_transparent(true)
-            .with_visible(false)
+            // Keep the window visible at all times. Hiding a winit window
+            // stops it from servicing cross-thread repaint requests on
+            // Windows, which made the first hotkey after a long idle period
+            // unreliable. The window is fully transparent and click-through
+            // while the capsule is not shown.
+            .with_visible(true)
             .with_active(false)
             .with_always_on_top()
             .with_taskbar(false)
@@ -65,8 +70,14 @@ fn main() {
 }
 
 fn show_error(message: &str) {
-    let text = message.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
-    let title = "VoxKey".encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let text = message
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
+    let title = "VoxKey"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
     unsafe {
         let _ = MessageBoxW(
             None,

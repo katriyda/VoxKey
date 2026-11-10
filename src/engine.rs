@@ -7,9 +7,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use sherpa_onnx::{
-    OfflineRecognizer, OfflineRecognizerConfig, OfflineSenseVoiceModelConfig,
-};
+use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineSenseVoiceModelConfig};
 
 use crate::audio::{resample_linear, Recorder};
 use crate::clipboard;
@@ -21,6 +19,8 @@ use crate::{model, zh};
 const TARGET_RATE: u32 = 16_000;
 const MAX_RECORDING_SECONDS: u64 = 60;
 const MIN_RECORDING_SECONDS: f32 = 0.35;
+const MIN_VOICE_RMS: f32 = 0.008;
+const SOFT_SINGLE_CHAR_RMS: f32 = 0.025;
 
 pub enum EngineCommand {
     Start {
@@ -233,14 +233,14 @@ fn run_engine(
             let samples = recorder.snapshot();
             let sample_rate = recorder.sample_rate();
             let new_samples = samples.len().saturating_sub(current.last_partial_samples);
-            if new_samples > sample_rate as usize / 4 {
+            if new_samples > sample_rate as usize / 4 && rms(&samples) >= MIN_VOICE_RMS {
                 current.last_partial_samples = samples.len();
                 if duration_seconds(samples.len(), sample_rate) >= 0.8 {
                     let Some(backend) = state.backend.as_ref() else {
                         continue;
                     };
                     match decode_samples(backend, &samples, sample_rate, current.language) {
-                        Ok(text) if !text.is_empty() => {
+                        Ok(text) if has_meaningful_text(&text) => {
                             emit(&tx, &ctx, EngineEvent::Transcript(text));
                         }
                         Ok(_) => {}
@@ -366,13 +366,24 @@ fn finish_session(
         return Err("没有检测到语音，请按住快捷键说话".to_string());
     }
 
+    // SenseVoice will happily "recognize" room noise as a character or
+    // punctuation mark. Require some real acoustic energy before trusting it.
+    if rms(&samples) < MIN_VOICE_RMS {
+        return Err("没有检测到语音，请按住快捷键说话".to_string());
+    }
+
     let Some(backend) = state.backend.as_ref() else {
         return Err("语音模型未就绪".to_string());
     };
 
     emit(tx, ctx, EngineEvent::Recognizing);
     let mut text = decode_samples(backend, &samples, sample_rate, session.language)?;
-    if text.is_empty() {
+    if !has_meaningful_text(&text) {
+        return Err("没有识别出文字，请再试一次".to_string());
+    }
+    // A single character decoded from a faint recording is almost always
+    // noise; ask for a clearer retry instead of inserting garbage.
+    if meaningful_char_count(&text) <= 1 && rms(&samples) < SOFT_SINGLE_CHAR_RMS {
         return Err("没有识别出文字，请再试一次".to_string());
     }
 
@@ -389,7 +400,7 @@ fn finish_session(
         }
     }
 
-    if text.is_empty() {
+    if !has_meaningful_text(&text) {
         return Err("纠错后的文本为空，已取消插入".to_string());
     }
 
@@ -443,6 +454,21 @@ fn postprocess(language: Language, raw: &str) -> String {
     }
 }
 
+fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+fn meaningful_char_count(text: &str) -> usize {
+    text.chars().filter(|ch| ch.is_alphanumeric()).count()
+}
+
+fn has_meaningful_text(text: &str) -> bool {
+    text.chars().any(|ch| ch.is_alphanumeric())
+}
+
 fn strip_sense_voice_tags(raw: &str) -> String {
     let mut result = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -464,10 +490,7 @@ fn load_backend(dir: &Path, language: Language) -> Result<Backend, String> {
     let model = dir.join("model.int8.onnx");
     let tokens = dir.join("tokens.txt");
     if !model.is_file() || !tokens.is_file() {
-        return Err(format!(
-            "模型文件缺失，请删除缓存后重启：{}",
-            dir.display()
-        ));
+        return Err(format!("模型文件缺失，请删除缓存后重启：{}", dir.display()));
     }
 
     let mut config = OfflineRecognizerConfig::default();
@@ -515,12 +538,35 @@ mod tests {
 
     #[test]
     fn postprocesses_traditional() {
-        assert_eq!(postprocess(Language::ZhTw, "这是语音输入。"), "這是語音輸入。");
+        assert_eq!(
+            postprocess(Language::ZhTw, "这是语音输入。"),
+            "這是語音輸入。"
+        );
         assert_eq!(postprocess(Language::En, "hello"), "hello");
     }
 
     #[test]
     fn duration_math() {
         assert!((duration_seconds(16_000, 16_000) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn punctuation_only_is_not_text() {
+        assert!(!has_meaningful_text(""));
+        assert!(!has_meaningful_text("。"));
+        assert!(!has_meaningful_text("，！？…"));
+        assert!(has_meaningful_text("你好"));
+        assert!(has_meaningful_text("hello"));
+        assert!(has_meaningful_text("こんにちは"));
+    }
+
+    #[test]
+    fn rms_distinguishes_silence_from_speech() {
+        assert_eq!(rms(&[]), 0.0);
+        assert!(rms(&vec![0.0; 1000]) < 0.001);
+        assert!((rms(&vec![0.1; 1000]) - 0.1).abs() < 1e-5);
+        assert_eq!(meaningful_char_count("。"), 0);
+        assert_eq!(meaningful_char_count("我。"), 1);
+        assert_eq!(meaningful_char_count("你好"), 2);
     }
 }

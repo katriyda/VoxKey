@@ -268,4 +268,3 @@ fn should_skip_format(format: u32) -> bool {
             | CF_DSPENHMETAFILE
     ) || (CF_PRIVATEFIRST..=CF_PRIVATELAST).contains(&format)
 }
-

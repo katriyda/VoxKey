@@ -111,9 +111,7 @@ impl Recorder {
         }
         .map_err(|e| format!("无法打开麦克风: {e}"))?;
 
-        stream
-            .play()
-            .map_err(|e| format!("无法开始录音: {e}"))?;
+        stream.play().map_err(|e| format!("无法开始录音: {e}"))?;
 
         Ok(Self {
             stream: Some(stream),
