@@ -30,6 +30,9 @@ pub struct VoxKeyApp {
     overlay_width: f32,
     overlay_sent_width: f32,
     overlay_configured: bool,
+    overlay_hwnd_raw: Option<isize>,
+    overlay_style_refresh: u8,
+    previous_foreground: Option<isize>,
     configure_attempts: u32,
     show_settings: bool,
     focus_settings: bool,
@@ -78,6 +81,9 @@ impl VoxKeyApp {
             overlay_width: 360.0,
             overlay_sent_width: 0.0,
             overlay_configured: false,
+            overlay_hwnd_raw: None,
+            overlay_style_refresh: 0,
+            previous_foreground: None,
             configure_attempts: 0,
             show_settings: false,
             focus_settings: false,
@@ -441,10 +447,10 @@ impl VoxKeyApp {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         if let Ok(handle) = frame.window_handle() {
             if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-                let hwnd = windows::Win32::Foundation::HWND(
-                    win32.hwnd.get() as *mut std::ffi::c_void,
-                );
+                let raw = win32.hwnd.get();
+                let hwnd = windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void);
                 platform::configure_overlay_window(hwnd);
+                self.overlay_hwnd_raw = Some(raw);
                 self.overlay_configured = true;
                 return;
             }
@@ -481,6 +487,8 @@ impl VoxKeyApp {
             )));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(x, y)));
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            self.previous_foreground = platform::foreground_window().map(|hwnd| hwnd.0 as isize);
+            self.overlay_style_refresh = 12;
             self.overlay_os_visible = true;
             self.overlay_sent_width = width;
             ctx.request_repaint();
@@ -520,6 +528,29 @@ impl eframe::App for VoxKeyApp {
         if closed && self.overlay_os_visible {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.overlay_os_visible = false;
+            self.previous_foreground = None;
+        }
+
+        // winit may rewrite extended window styles when it shows the window.
+        // Reapply the non-activating style for a few frames after each show
+        // and put keyboard focus back on the app that was focused before.
+        if self.overlay_os_visible && self.overlay_style_refresh > 0 {
+            if let Some(raw) = self.overlay_hwnd_raw {
+                let hwnd = windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void);
+                platform::configure_overlay_window(hwnd);
+                if platform::foreground_window() == Some(hwnd) {
+                    if let Some(previous) = self.previous_foreground {
+                        if previous != raw {
+                            platform::set_foreground_window(
+                                windows::Win32::Foundation::HWND(
+                                    previous as *mut std::ffi::c_void,
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+            self.overlay_style_refresh = self.overlay_style_refresh.saturating_sub(1);
         }
 
         self.update_overlay_window(ctx);

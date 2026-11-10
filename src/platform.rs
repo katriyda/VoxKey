@@ -18,7 +18,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallNextHookEx, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos,
-    GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW, PostQuitMessage,
+    GetForegroundWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW, PostQuitMessage,
     PostThreadMessageW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu, TranslateMessage,
     UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HICON, HMENU, IDC_ARROW,
@@ -707,6 +707,21 @@ pub fn configure_overlay_window(hwnd: HWND) {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
             );
         }
+    }
+}
+
+pub fn foreground_window() -> Option<HWND> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        None
+    } else {
+        Some(hwnd)
+    }
+}
+
+pub fn set_foreground_window(hwnd: HWND) {
+    unsafe {
+        let _ = SetForegroundWindow(hwnd);
     }
 }
 
