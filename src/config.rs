@@ -8,8 +8,9 @@ use crate::secrets;
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
+    #[default]
     #[serde(rename = "zh-CN")]
     ZhCn,
     #[serde(rename = "en")]
@@ -20,12 +21,6 @@ pub enum Language {
     Ja,
     #[serde(rename = "ko")]
     Ko,
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        Self::ZhCn
-    }
 }
 
 impl Language {

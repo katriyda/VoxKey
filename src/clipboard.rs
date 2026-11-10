@@ -75,9 +75,7 @@ pub fn inject_text(text: &str) -> Result<Option<String>, String> {
 
     let restore_result = restore_clipboard(&snapshot);
     match (paste_result, restore_result) {
-        (Err(err), _) => {
-            return Err(format!("模拟 Ctrl+V 失败: {err}"));
-        }
+        (Err(err), _) => Err(format!("模拟 Ctrl+V 失败: {err}")),
         (Ok(()), Err(err)) => Ok(Some(format!("原剪贴板恢复失败: {err}"))),
         (Ok(()), Ok(())) => Ok(None),
     }
