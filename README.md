@@ -1,0 +1,170 @@
+# VoxKey
+
+VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住快捷键说话，松开后本地识别，并通过剪贴板 + `Ctrl+V` 把文字插入当前聚焦的输入框。可选接入任意 OpenAI 兼容接口做**极度保守**的识别纠错。
+
+- 纯 Rust，原生 Win32 + egui 悬浮窗，无 Electron / WebView。
+- 本地识别使用 sherpa-onnx SenseVoice 多语言模型，默认简体中文，支持 English、繁體中文、日本語、한국어。
+- 首次运行自动下载模型到本机缓存；之后可完全离线运行。
+- Release 构建为单个 `VoxKey.exe`，绿色免安装，不使用 MSIX / MSI / 安装程序。
+
+## 功能
+
+| 功能 | 实现 |
+| --- | --- |
+| 全局按住说话 | `WH_KEYBOARD_LL` 低级键盘钩子，可选自定义组合键 |
+| 录音 | `cpal` 默认麦克风，自动重采样到 16 kHz 单声道 |
+| 识别 | `sherpa-onnx` OfflineRecognizer + SenseVoice int8 |
+| 实时文字 | 录音过程中按约 1.3 秒间隔对累计音频做一次识别，只用于界面预览；松键后再做最终识别 |
+| 悬浮窗 | egui/eframe 无边框透明置顶窗口，底部居中，RMS 驱动的 5 根波形，弹性宽度，淡入淡出 |
+| 插入 | 快照原剪贴板 → 写入 Unicode 文本 → 模拟 `Ctrl+V` → 延时恢复原剪贴板 |
+| 纠错 | OpenAI-compatible `/chat/completions`；严格系统提示词 + 本地编辑距离/长度守卫 |
+| 托盘 | 语言切换、LLM 开/关、Settings、退出 |
+| 设置 | Base URL、API Key、Model、Test、Save；快捷键/语言也可在此保存 |
+| 密钥安全 | API Key 使用 Windows DPAPI（CurrentUser）加密后写入配置文件；清空后不保留密文 |
+
+## 使用
+
+1. 从 [Releases](https://github.com/katriyda/VoxKey/releases) 下载 `VoxKey.exe`，双击运行。程序无主窗口，常驻系统托盘。
+2. 首次运行会下载 SenseVoice int8 模型（约 229 MB），屏幕底部悬浮窗显示下载进度。模型缓存在：
+   `%LOCALAPPDATA%\VoxKey\models\sensevoice-int8\`
+3. 默认按住**右 Ctrl**说话，松开后自动识别并插入。也可在托盘 `设置…` 中修改为：
+   - 右 Ctrl（默认）
+   - `Ctrl + Shift + 空格`
+   - `Fn / F13`
+   - 任意受支持的组合，例如 `ctrl+alt+space`、`f13`、`right_alt`。
+
+### 关于 Fn 键
+
+多数笔记本的 Fn 键在键盘固件层就被消费，根本不会产生 Windows 键盘消息，`WH_KEYBOARD_LL` 也无法拦截。VoxKey 实现了对以 `F13`/相关扫描码上报的 Fn 的兼容探测，但**不能承诺所有设备的 Fn 都可识别**。
+
+因此默认使用右 Ctrl 作为可靠替代，并提供可配置快捷键。设置页有 `Fn / F13` 预设，用于少数会把 Fn 映射为 F13 的键盘。这是有意为之的可用性取舍，而不是遗漏。
+
+## 配置与数据
+
+| 内容 | 默认位置 | 覆盖环境变量 |
+| --- | --- | --- |
+| 设置文件 | `%APPDATA%\VoxKey\config.json` | `VOXKEY_DATA_DIR` |
+| 模型缓存 | `%LOCALAPPDATA%\VoxKey\models\sensevoice-int8\` | `VOXKEY_MODEL_DIR` |
+
+配置示例（API Key 实际以 `api_key_enc` 密文存储，不会出现明文）：
+
+```json
+{
+  "language": "zh-CN",
+  "hotkey": "right_ctrl",
+  "llm_enabled": false,
+  "api_base_url": "https://api.openai.com/v1",
+  "model": "gpt-4o-mini",
+  "api_key_enc": "<DPAPI 密文 hex；无密钥时省略此字段>"
+}
+```
+
+- Base URL 可以是 `https://api.openai.com/v1`、`http://localhost:11434`，也可以直接填完整的 `.../chat/completions`。
+- 若端点不需要鉴权，API Key 留空即可；VoxKey 不会发送空的 `Authorization` 头。
+- API Key 的“彻底清空”：设置页点击“清空”并 Save，配置文件中的 `api_key_enc` 会被移除，绝不会回退到明文。
+
+## LLM 纠错约束
+
+系统提示词要求模型只修复明显的同音/近音识别错误，例如“配森”→“Python”、“杰森”→“JSON”；禁止润色、改写、缩写、删减、翻译、补写。原文正确时必须原样返回。
+
+代码侧还有独立于模型的保护：
+
+- 长度比例超出 `0.70..1.45` 时拒绝改写；
+- 原文长度 ≥ 10 时，字符编辑距离超过约 25% 直接回退原文；
+- 新增换行、空响应、代码围栏等异常会回退原文；
+- 任何网络/API 错误都不会阻止原文插入，只会跳过纠错。
+
+LLM 请求是可选联网功能，音频本身始终留在本机。
+
+## 剪贴板兼容性说明
+
+插入流程：
+
+```
+读取原剪贴板（Unicode 文本、DIB、DROPFILES、LOCALE、注册的 HGLOBAL 格式等）
+→ 写入待插入 Unicode 文本
+→ 等待剪贴板更新
+→ SendInput Ctrl+V
+→ 等待 350 ms
+→ 恢复原剪贴板
+```
+
+- 使用 `Ctrl+V` 而不是模拟逐字输入，避免破坏中文输入法状态。
+- 悬浮窗带 `WS_EX_NOACTIVATE` + `WS_EX_TOOLWINDOW`，并使用 non-focusable / mouse-passthrough 视口，不会抢走目标输入框焦点。
+- **限制**：纯 Win32 剪贴板 API 无法可靠复制所有 GDI 句柄型格式，例如 `CF_BITMAP`；这些格式在恢复时可能丢失。常见的文本、图片 DIB、文件列表格式会被保留。
+- Windows 剪贴板历史会记录本次注入的文本，这是系统行为。
+- 若读取原剪贴板失败，VoxKey 会取消插入，以免破坏用户现有剪贴板。
+
+## 构建（仅 GitHub Actions）
+
+本仓库禁止本地编译；所有构建在 GitHub Actions 的 `windows-2022` Runner 上执行。
+
+```text
+Actions → Build VoxKey → Run workflow
+```
+
+也支持推送 `v*` tag 自动构建并创建 GitHub Release：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+工作流见 [`.github/workflows/build.yml`](.github/workflows/build.yml)：`cargo test --release` → `cargo build --release` → 检查 DLL 依赖 → 单文件 artifact → Tag 时发布 Release。通过 `.cargo/config.toml` 与 Release profile 尽可能静态链接，最终 artifact 只有：
+
+```text
+target/release/VoxKey.exe
+```
+
+## 技术栈
+
+- Rust 2021
+- `windows` 0.62（Win32 钩子、托盘、剪贴板、SendInput、DPAPI）
+- `eframe` / `egui` 0.32（悬浮窗与设置）
+- `cpal` 0.16（麦克风）
+- `sherpa-onnx` 2.0（本地 ASR）
+- `tokio` + `reqwest`（模型下载与 LLM 请求）
+- `serde` / `serde_json`（配置与 API JSON）
+
+## 架构
+
+```text
+src/main.rs        eframe 启动、窗口参数
+src/app.rs         状态机、悬浮窗显示/隐藏/定位、托盘事件、设置窗口
+src/engine.rs      录音线程：模型加载、录音、预览识别、最终识别、LLM、插入
+src/audio.rs       cpal 采集与 16 kHz 线性重采样
+src/model.rs        SenseVoice 首次下载（HF / hf-mirror）与缓存校验
+src/platform.rs    WH_KEYBOARD_LL、托盘菜单、隐藏窗口、NoActivate/工作区
+src/clipboard.rs   剪贴板快照/恢复、SendInput Ctrl+V
+src/llm.rs         OpenAI-compatible 纠错、保守守卫、连接测试
+src/config.rs      配置读写（JSON）
+src/secrets.rs     Windows DPAPI 密钥保护
+src/overlay.rs     胶囊悬浮窗绘制与动画
+src/settings.rs    Settings UI
+src/zh.rs          简体→繁体单字转换
+src/hotkey.rs      快捷键解析
+```
+
+## 已知限制（如实说明）
+
+- **Fn 键**：见上文。Windows 全局钩子无法可靠监听纯硬件 Fn，默认右 Ctrl。
+- **“实时”转写**：SenseVoice 是离线模型。VoxKey 通过录音期间周期性重跑识别来更新右侧预览文字，并非常规意义上的流式 ASR；长句预览会有约 1 秒级延迟，最终文字以松键后的结果为准。
+- **繁体中文**：使用 OpenCC 单字映射进行简体→繁体转换，不做完整的地区词/短语本地化；个别一简对多繁的字词可能不完美。
+- **剪贴板恢复**：GDI 句柄型格式不支持完整恢复；见上文。
+- **自动下载网络**：模型优先从 Hugging Face 下载，失败时回退 hf-mirror。若两个镜像都不可达，首次运行会显示错误；可手动按上述目录放置 `model.int8.onnx` 与 `tokens.txt` 后重启。
+- **运行时验证**：构建与单元测试在 GitHub Actions（Windows）上执行；真实麦克风、托盘、焦点保持、中文输入法兼容性和各机型的 Fn 行为需要在目标 Windows 设备上实测。仓库会明确记录已验证和未验证项。
+- **快捷键冲突**：全局钩子只能观察，不能在所有场景下阻止快捷键被当前应用同时接收；默认右 Ctrl 通常无冲突，若自定义为常用组合请自行注意。
+
+## 第三方资源与许可
+
+- 代码：MIT，见 [LICENSE](LICENSE)。
+- Noto Sans CJK SC 字体：SIL Open Font License 1.1，见 [assets/OFL.txt](assets/OFL.txt)。
+- OpenCC 简体→繁体映射数据：Apache-2.0，见 [NOTICE](NOTICE) 与 `assets/zh_hans_to_hant.tsv` 文件头。
+- SenseVoice 模型与 sherpa-onnx：模型由 k2-fsa/sherpa-onnx 发布，遵循其上游许可证；详见 [NOTICE](NOTICE)。
+- 图标由本项目生成。
+
+## 隐私
+
+- 麦克风音频只在本进程内识别。
+- 仅当用户在托盘/设置中启用 LLM 纠错时，识别后的**文本**才会发送到配置的 OpenAI-compatible 接口。
+- 不收集遥测。

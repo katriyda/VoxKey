@@ -24,17 +24,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_CONTROL, VK_V,
 };
 
-const CF_TEXT: u32 = 1;
 const CF_BITMAP: u32 = 2;
 const CF_METAFILEPICT: u32 = 3;
-const CF_OEMTEXT: u32 = 7;
-const CF_DIB: u32 = 8;
 const CF_PALETTE: u32 = 9;
 const CF_UNICODETEXT: u32 = 13;
 const CF_ENHMETAFILE: u32 = 14;
-const CF_HDROP: u32 = 15;
-const CF_LOCALE: u32 = 16;
-const CF_DIBV5: u32 = 17;
 const CF_OWNERDISPLAY: u32 = 0x0080;
 const CF_DSPBITMAP: u32 = 0x0082;
 const CF_DSPMETAFILEPICT: u32 = 0x0083;

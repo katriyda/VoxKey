@@ -3,9 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use egui::{
-    Color32, CornerRadius, FontId, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2,
-};
+use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 pub const WINDOW_HEIGHT: f32 = 92.0;
 
@@ -252,8 +250,9 @@ impl Overlay {
                     _ => Color32::from_rgb(240, 243, 248),
                 };
                 let main_font = FontId::proportional(14.5);
+                let main_render = fade(main_color, animate);
                 let main_galley = ctx.fonts(|fonts| {
-                    fonts.layout_no_wrap(self.title.clone(), main_font, main_color)
+                    fonts.layout_no_wrap(self.title.clone(), main_font.clone(), main_render)
                 });
                 let main_pos = if has_detail {
                     Pos2::new(text_left, capsule.center().y - 19.0)
@@ -271,16 +270,17 @@ impl Overlay {
                 clipped_painter.galley(
                     Pos2::new(main_x, main_pos.y),
                     main_galley,
-                    fade(main_color, animate),
+                    main_render,
                 );
 
                 if has_detail {
                     let detail_color = Color32::from_rgb(151, 160, 177);
+                    let detail_render = fade(detail_color, animate);
                     let detail_galley = ctx.fonts(|fonts| {
                         fonts.layout_no_wrap(
                             self.detail.clone(),
                             FontId::proportional(10.5),
-                            detail_color,
+                            detail_render,
                         )
                     });
                     let x = if detail_galley.size().x > text_rect.width() {
@@ -291,7 +291,7 @@ impl Overlay {
                     clipped_painter.galley(
                         Pos2::new(x, capsule.center().y + 3.0),
                         detail_galley,
-                        fade(detail_color, animate),
+                        detail_render,
                     );
                 }
 
@@ -351,10 +351,12 @@ fn fade(color: Color32, opacity: f32) -> Color32 {
 }
 
 fn sanitize_line(text: String) -> String {
-    text.replace(['\r', '\n', '\t'], " ").trim().to_string()
-}
-
-/// A small helper used by the settings header.
-pub fn accent_text(text: impl Into<String>) -> RichText {
-    RichText::new(text).color(Color32::from_rgb(125, 235, 176))
+    text.chars()
+        .map(|ch| match ch {
+            '\r' | '\n' | '\t' => ' ',
+            other => other,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
