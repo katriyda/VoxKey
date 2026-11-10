@@ -17,18 +17,18 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CallNextHookEx, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos,
-    GetForegroundWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW,
-    PostQuitMessage, PostThreadMessageW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu, TranslateMessage,
-    UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HICON, HMENU, IDC_ARROW,
-    IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MENU_ITEM_FLAGS, MSG,
-    SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WM_COMMAND,
-    WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NULL, WM_QUIT,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW,
+    AppendMenuW, CallNextHookEx, CallWindowProcW, CreateIconFromResourceEx, CreatePopupMenu,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
+    GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW,
+    PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu,
+    TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, GWL_EXSTYLE,
+    HICON, HMENU, HTTRANSPARENT, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT,
+    LLKHF_INJECTED, MENU_ITEM_FLAGS, MSG, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TRACK_POPUP_MENU_FLAGS,
+    WH_KEYBOARD_LL, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
+    WM_NCHITTEST, WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC,
+    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 
 use crate::config::Language;
@@ -694,11 +694,46 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 // Window helpers
 // -------------------------------------------------------------------------
 
+static PREVIOUS_OVERLAY_PROC: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+
+/// Reports `HTTRANSPARENT` for every hit test so the desktop under the capsule
+/// keeps receiving clicks. A `WS_EX_LAYERED` + `WS_EX_TRANSPARENT` pair would
+/// do the same, but winit sets `WS_EX_LAYERED` without layered attributes,
+/// which stops the capsule from being composited on screen at all.
+unsafe extern "system" fn overlay_window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_NCHITTEST {
+        return LRESULT(HTTRANSPARENT as isize);
+    }
+    let previous = PREVIOUS_OVERLAY_PROC.load(Ordering::Relaxed);
+    if previous == 0 {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    }
+    let previous: WNDPROC = unsafe { std::mem::transmute(previous) };
+    unsafe { CallWindowProcW(previous, hwnd, msg, wparam, lparam) }
+}
+
 /// Marks the hidden-by-default overlay window as non-activating. Call it while
 /// the overlay is still hidden, so showing it never steals focus from the app
 /// receiving dictated text.
 pub fn configure_overlay_window(hwnd: HWND) {
     unsafe {
+        if PREVIOUS_OVERLAY_PROC.load(Ordering::Relaxed) == 0 {
+            let previous = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
+            if previous != 0 {
+                PREVIOUS_OVERLAY_PROC.store(previous, Ordering::Relaxed);
+                SetWindowLongPtrW(
+                    hwnd,
+                    GWLP_WNDPROC,
+                    overlay_window_proc as *const () as isize,
+                );
+            }
+        }
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let new_style = (style | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize))
             & !(WS_EX_APPWINDOW.0 as isize);

@@ -91,8 +91,9 @@ LLM 请求是可选联网功能，音频本身始终留在本机。
 ```
 
 - 使用 `Ctrl+V` 而不是模拟逐字输入，避免破坏中文输入法状态。
-- 悬浮窗带 `WS_EX_NOACTIVATE` + `WS_EX_TOOLWINDOW`，并使用 non-focusable / mouse-passthrough 视口，不会抢走目标输入框焦点。
-- OS 窗口常驻可见，但胶囊内容隐藏时窗口完全透明且鼠标穿透。这是为了避开 winit 隐藏窗口在 Windows 上不再响应跨线程重绘请求的问题；否则应用空闲约 10 秒后第一次按热键可能没有反应。
+- 悬浮窗带 `WS_EX_NOACTIVATE` + `WS_EX_TOOLWINDOW` + `WS_EX_TOPMOST`，不会抢走目标输入框焦点。
+- OS 窗口常驻可见，但胶囊内容隐藏时窗口完全透明。这是为了避开 winit 隐藏窗口在 Windows 上不再响应跨线程重绘请求的问题；否则应用空闲约 10 秒后第一次按热键可能没有反应。
+- 鼠标穿透由窗口过程在 `WM_NCHITTEST` 中返回 `HTTRANSPARENT` 实现（`platform::overlay_window_proc`）。**不要**改回 eframe 的 `with_mouse_passthrough(true)`：winit 会为此设置 `WS_EX_LAYERED` 却不调用 `SetLayeredWindowAttributes`/`UpdateLayeredWindow`，结果是窗口仍有正确尺寸与内容（`PrintWindow` 能看到胶囊），但桌面合成器完全不绘制它——悬浮窗在屏幕上彻底不可见，波浪动画与实时预览文字也就永远看不到。
 - **限制**：纯 Win32 剪贴板 API 无法可靠复制所有 GDI 句柄型格式，例如 `CF_BITMAP`；这些格式在恢复时可能丢失。常见的文本、图片 DIB、文件列表格式会被保留。
 - Windows 剪贴板历史会记录本次注入的文本，这是系统行为。
 - 若读取原剪贴板失败，VoxKey 会取消插入，以免破坏用户现有剪贴板。
@@ -166,6 +167,12 @@ src/hotkey.rs      快捷键解析
 4b75fe6544c553b9b6aef251c843936893f3a0c47ddcb2741e197af6cdefbc5e
 ```
 
+2026-11-11 的悬浮窗可见性修复构建（本地 `cargo build --release`，尚未经过 CI）：
+
+```text
+e4151853afdebd710dbb0855a44ef35a70cfd8a77251b1619ae1f7c093d86a10
+```
+
 在本机（当前受限的低完整性桌面会话）做过以下运行时验证：
 
 - 模型首次下载完成，文件大小与预期完全一致；
@@ -174,10 +181,19 @@ src/hotkey.rs      快捷键解析
 - 完整热键链路：右 Ctrl → 录音 → 识别 → 剪贴板注入 → 目标文本框收到“开饭时间早上9点至下午5点。” → 原剪贴板哨兵值被恢复；
 - 悬浮窗在录音时显示，扩展样式 `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，尺寸约 329×92，底部居中，获得焦点前后均未抢走前台输入框；
 - 空闲 9 秒后再按热键仍能正常触发（修复隐藏窗口丢失重绘请求的问题后）；
+- 悬浮窗在真实桌面上可见：录音过程中桌面截图能直接看到胶囊、实时预览文字与波形（修复 `WS_EX_LAYERED` 导致的不可见问题后，见下方“悬浮窗可见性修复”）；
 - 静音/环境噪声不再插入“我。”或“。”这类幻觉结果，而是提示“没有检测到语音”；
 - 错误写入 `%APPDATA%\VoxKey\voxkey.log`。
 
 **仍未实测**：物理 Fn 键（各机型固件差异）、真实人声而非扬声器回放、托盘图标与菜单点击、Settings 窗口交互、真实 LLM 端点、干净 Windows 10 机器上的首次运行。当前会话是低完整性进程，`Shell_NotifyIconW` 返回 Win32 5（拒绝访问），且无法向普通完整性窗口注入测试按键；这些限制来自测试沙箱，不是应用逻辑。普通非提权用户会话应能正常使用托盘；若托盘不出现，请确认 Explorer 正在运行，并避免以管理员身份启动。
+
+## 悬浮窗可见性修复（2026-11-11）
+
+用户反馈“没有看到动画、文字也没有实时写上去”。排查结果是整条链路都在正常工作——录音、1.3 秒一次的预览识别、`Transcript` 事件、每帧动画状态、`PrintWindow` 内容全部正确——但**悬浮窗从未被桌面合成器绘制出来**，所以屏幕上一片空白。
+
+根因：`main.rs` 里的 `with_mouse_passthrough(true)` 会让 winit 给窗口加上 `WS_EX_LAYERED`（`window_state.rs` 中 `IGNORE_CURSOR_EVENT` 分支），却从不设置 layered 属性。一个没有属性的 layered 窗口不会被合成，窗口存在、内容在渲染、`IsWindowVisible` 为真，但屏幕上什么都看不到。
+
+修复：去掉 `with_mouse_passthrough`，改为在窗口过程里对 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，既保留真实的逐像素透明（DWM blur-behind），又保持鼠标穿透。
 
 ## 已知限制（如实说明）
 
