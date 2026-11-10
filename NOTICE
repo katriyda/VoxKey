@@ -1,0 +1,31 @@
+VoxKey third-party notices
+==========================
+
+Noto Sans CJK SC
+----------------
+File: assets/NotoSansCJKsc-Regular.otf
+Source: https://github.com/notofonts/noto-cjk
+License: SIL Open Font License 1.1 (full text in assets/OFL.txt)
+Copyright: Google Inc. / Adobe Inc. and Noto CJK contributors.
+
+OpenCC simplified/traditional mapping
+-------------------------------------
+File: assets/zh_hans_to_hant.tsv
+Derived from: https://github.com/BYVoid/OpenCC data/dictionary/TSCharacters.txt
+License: Apache License 2.0
+Copyright: BYVoid and OpenCC contributors.
+The derived file contains a single best-effort inverse mapping per character,
+with provenance comments retained in the file header.
+
+sherpa-onnx and SenseVoice model
+--------------------------------
+Runtime: https://github.com/k2-fsa/sherpa-onnx (Apache-2.0)
+Model: https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+The model is downloaded at runtime, not bundled in this repository. Its
+upstream license and FunASR/SenseVoice notices apply:
+https://github.com/modelscope/FunASR
+
+Rust dependencies
+-----------------
+Rust crate licenses are listed by `cargo metadata`:
+https://github.com/katriyda/VoxKey

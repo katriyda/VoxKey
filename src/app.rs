@@ -30,6 +30,9 @@ pub struct VoxKeyApp {
     overlay_width: f32,
     overlay_sent_width: f32,
     overlay_configured: bool,
+    overlay_hwnd_raw: Option<isize>,
+    overlay_style_refresh: u8,
+    previous_foreground: Option<isize>,
     configure_attempts: u32,
     show_settings: bool,
     focus_settings: bool,
@@ -78,6 +81,9 @@ impl VoxKeyApp {
             overlay_width: 360.0,
             overlay_sent_width: 0.0,
             overlay_configured: false,
+            overlay_hwnd_raw: None,
+            overlay_style_refresh: 0,
+            previous_foreground: None,
             configure_attempts: 0,
             show_settings: false,
             focus_settings: false,
@@ -102,6 +108,7 @@ impl VoxKeyApp {
                     });
                 }
                 UiEvent::PlatformError(err) => {
+                    crate::logging::error(&err);
                     self.overlay.present(
                         OverlayKind::Error,
                         "VoxKey 启动异常",
@@ -109,7 +116,6 @@ impl VoxKeyApp {
                         Some(Duration::from_secs(7)),
                     );
                 }
-                UiEvent::Quit => self.request_quit(ctx),
             }
         }
     }
@@ -240,12 +246,8 @@ impl VoxKeyApp {
                 } else {
                     format!("{label} · {:.1} MB", downloaded as f64 / 1_000_000.0)
                 };
-                self.overlay.present(
-                    OverlayKind::Download,
-                    "正在下载本地语音模型",
-                    detail,
-                    None,
-                );
+                self.overlay
+                    .present(OverlayKind::Download, "正在下载本地语音模型", detail, None);
             }
             EngineEvent::RecordingStarted => {
                 self.overlay.kind = OverlayKind::Listening;
@@ -267,8 +269,7 @@ impl VoxKeyApp {
                 if !self.session_active {
                     return;
                 }
-                let title = if self.overlay.title.is_empty()
-                    || self.overlay.title == "正在聆听…"
+                let title = if self.overlay.title.is_empty() || self.overlay.title == "正在聆听…"
                 {
                     "正在识别…".to_string()
                 } else {
@@ -278,8 +279,12 @@ impl VoxKeyApp {
                     .present(OverlayKind::Working, title, "正在识别语音…", None);
             }
             EngineEvent::Refining => {
-                self.overlay
-                    .present(OverlayKind::Working, self.overlay.title.clone(), "LLM 纠错中…", None);
+                self.overlay.present(
+                    OverlayKind::Working,
+                    self.overlay.title.clone(),
+                    "LLM 纠错中…",
+                    None,
+                );
             }
             EngineEvent::Done { text, warning } => {
                 self.session_active = false;
@@ -313,6 +318,17 @@ impl VoxKeyApp {
         let settings_id = egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME);
         ctx.send_viewport_cmd_to(settings_id, egui::ViewportCommand::Close);
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+
+        // eframe normally tears itself down promptly after the root Close
+        // command. A hidden root viewport plus a transient secondary window can
+        // delay that shutdown on some Windows versions, so guarantee termination
+        // after all Win32 resources have already been cleaned up above.
+        let _ = std::thread::Builder::new()
+            .name("voxkey-exit".to_string())
+            .spawn(|| {
+                std::thread::sleep(Duration::from_millis(800));
+                std::process::exit(0);
+            });
     }
 
     fn save_settings(&mut self) {
@@ -423,15 +439,30 @@ impl VoxKeyApp {
         action
     }
 
-    fn update_overlay_window(&mut self, ctx: &egui::Context) {
-        if !self.overlay_configured {
-            self.configure_attempts += 1;
-            self.overlay_configured = platform::configure_overlay_window();
-            if !self.overlay_configured && self.configure_attempts < 100 {
-                ctx.request_repaint_after(Duration::from_millis(100));
+    fn configure_overlay(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if self.overlay_configured {
+            return;
+        }
+
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = frame.window_handle() {
+            if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+                let raw = win32.hwnd.get();
+                let hwnd = windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void);
+                platform::configure_overlay_window(hwnd);
+                self.overlay_hwnd_raw = Some(raw);
+                self.overlay_configured = true;
+                return;
             }
         }
 
+        self.configure_attempts += 1;
+        if self.configure_attempts < 100 {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    fn update_overlay_window(&mut self, ctx: &egui::Context) {
         let desired_width = self.overlay.desired_width(ctx);
         if !self.overlay_os_visible {
             self.overlay_width = desired_width;
@@ -444,8 +475,8 @@ impl VoxKeyApp {
         }
 
         if self.overlay.is_visible() && !self.overlay_os_visible {
-            let (left, top, work_w, work_h) = platform::primary_work_area()
-                .unwrap_or((0, 0, 1920, 1080));
+            let (left, top, work_w, work_h) =
+                platform::primary_work_area().unwrap_or((0, 0, 1920, 1080));
             let ppp = ctx.pixels_per_point();
             let width = self.overlay_width;
             let x = (left as f32 + (work_w as f32 - width * ppp) / 2.0) / ppp;
@@ -456,16 +487,16 @@ impl VoxKeyApp {
             )));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(x, y)));
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            self.previous_foreground = platform::foreground_window().map(|hwnd| hwnd.0 as isize);
+            self.overlay_style_refresh = 12;
             self.overlay_os_visible = true;
             self.overlay_sent_width = width;
-            self.overlay_configured = self.overlay_configured
-                || platform::configure_overlay_window();
             ctx.request_repaint();
         } else if self.overlay_os_visible
             && (self.overlay_width - self.overlay_sent_width).abs() > 1.0
         {
-            let (left, top, work_w, work_h) = platform::primary_work_area()
-                .unwrap_or((0, 0, 1920, 1080));
+            let (left, top, work_w, work_h) =
+                platform::primary_work_area().unwrap_or((0, 0, 1920, 1080));
             let ppp = ctx.pixels_per_point();
             let width = self.overlay_width;
             let x = (left as f32 + (work_w as f32 - width * ppp) / 2.0) / ppp;
@@ -482,11 +513,12 @@ impl VoxKeyApp {
 }
 
 impl eframe::App for VoxKeyApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().clamp(0.0, 0.05);
         self.last_frame = now;
 
+        self.configure_overlay(ctx, frame);
         self.process_events(ctx);
         if self.exiting {
             return;
@@ -494,8 +526,30 @@ impl eframe::App for VoxKeyApp {
 
         let closed = self.overlay.advance(dt);
         if closed && self.overlay_os_visible {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.overlay_os_visible = false;
+            // The OS window stays visible (and fully transparent) so winit
+            // keeps processing hotkey repaint requests. Only the capsule
+            // content is hidden.
+            self.previous_foreground = None;
+        }
+
+        // winit may rewrite extended window styles when it shows the window.
+        // Reapply the non-activating style for a few frames after each show
+        // and put keyboard focus back on the app that was focused before.
+        if self.overlay_os_visible && self.overlay_style_refresh > 0 {
+            if let Some(raw) = self.overlay_hwnd_raw {
+                let hwnd = windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void);
+                platform::configure_overlay_window(hwnd);
+                if platform::foreground_window() == Some(hwnd) {
+                    if let Some(previous) = self.previous_foreground {
+                        if previous != raw {
+                            platform::set_foreground_window(windows::Win32::Foundation::HWND(
+                                previous as *mut std::ffi::c_void,
+                            ));
+                        }
+                    }
+                }
+            }
+            self.overlay_style_refresh = self.overlay_style_refresh.saturating_sub(1);
         }
 
         self.update_overlay_window(ctx);
@@ -525,11 +579,6 @@ impl eframe::App for VoxKeyApp {
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 0.0]
-    }
-
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.engine.shutdown();
-        self.platform.shutdown();
     }
 }
 
@@ -571,17 +620,14 @@ fn install_fonts_and_style(ctx: &egui::Context) {
     ctx.set_style(style);
 
     ctx.style_mut(|style| {
-        style.text_styles.insert(
-            egui::TextStyle::Body,
-            FontId::proportional(13.0),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Button,
-            FontId::proportional(13.0),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Small,
-            FontId::proportional(10.5),
-        );
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, FontId::proportional(13.0));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Button, FontId::proportional(13.0));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Small, FontId::proportional(10.5));
     });
 }

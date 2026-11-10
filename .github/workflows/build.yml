@@ -37,10 +37,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Test
-        run: cargo test --release
+        run: cargo test --release --locked
 
       - name: Build release executable
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Verify standalone executable
         shell: pwsh

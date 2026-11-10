@@ -14,7 +14,9 @@ path = "src/main.rs"
 [dependencies]
 cpal = "0.16"
 eframe = { version = "0.32.3", default-features = false, features = ["default_fonts", "glow"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+egui = "0.32.3"
+raw-window-handle = "0.6"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sherpa-onnx = "2.0.1"

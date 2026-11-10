@@ -24,6 +24,18 @@ const VK_CAPITAL: u32 = 0x14;
 const VK_ESCAPE: u32 = 0x1B;
 const VK_OEM_3: u32 = 0xC0;
 const VK_F1: u32 = 0x70;
+const VK_F2: u32 = 0x71;
+const VK_F3: u32 = 0x72;
+const VK_F4: u32 = 0x73;
+const VK_F5: u32 = 0x74;
+const VK_F6: u32 = 0x75;
+const VK_F7: u32 = 0x76;
+const VK_F8: u32 = 0x77;
+const VK_F9: u32 = 0x78;
+const VK_F10: u32 = 0x79;
+const VK_F11: u32 = 0x7A;
+const VK_F12: u32 = 0x7B;
+const VK_F13: u32 = 0x7C;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HotkeySpec {
@@ -81,8 +93,8 @@ pub fn parse_hotkey(input: &str) -> Result<HotkeySpec, String> {
             continue;
         }
 
-        let (trigger, fn_alias) = trigger_code(&lower)
-            .ok_or_else(|| format!("不支持的按键: {token}"))?;
+        let (trigger, fn_alias) =
+            trigger_code(&lower).ok_or_else(|| format!("不支持的按键: {token}"))?;
         pending = Some(HotkeySpec {
             trigger,
             modifiers,
@@ -130,7 +142,7 @@ fn trigger_code(name: &str) -> Option<(u32, bool)> {
         "capslock" | "caps_lock" => VK_CAPITAL,
         "escape" | "esc" => VK_ESCAPE,
         "backtick" | "grave" => VK_OEM_3,
-        "fn" | "f13" => VK_F1 + 12,
+        "fn" | "f13" => VK_F13,
         _ => {
             if let Some(number) = name.strip_prefix('f') {
                 if let Ok(n) = number.parse::<u32>() {
@@ -181,30 +193,35 @@ pub fn format_label(trigger: u32, modifiers: u8, fn_alias: bool) -> String {
         VK_ESCAPE => Some("Esc"),
         VK_OEM_3 => Some("`"),
         VK_F1 => Some("F1"),
-        VK_F1 + 1 => Some("F2"),
-        VK_F1 + 2 => Some("F3"),
-        VK_F1 + 3 => Some("F4"),
-        VK_F1 + 4 => Some("F5"),
-        VK_F1 + 5 => Some("F6"),
-        VK_F1 + 6 => Some("F7"),
-        VK_F1 + 7 => Some("F8"),
-        VK_F1 + 8 => Some("F9"),
-        VK_F1 + 9 => Some("F10"),
-        VK_F1 + 10 => Some("F11"),
-        VK_F1 + 11 => Some("F12"),
-        VK_F1 + 12 if fn_alias => Some("Fn / F13"),
-        VK_F1 + 12 => Some("F13"),
-       0x41..=0x5A => None,
-       0x30..=0x39 => None,
+        VK_F2 => Some("F2"),
+        VK_F3 => Some("F3"),
+        VK_F4 => Some("F4"),
+        VK_F5 => Some("F5"),
+        VK_F6 => Some("F6"),
+        VK_F7 => Some("F7"),
+        VK_F8 => Some("F8"),
+        VK_F9 => Some("F9"),
+        VK_F10 => Some("F10"),
+        VK_F11 => Some("F11"),
+        VK_F12 => Some("F12"),
+        VK_F13 if fn_alias => Some("Fn / F13"),
+        VK_F13 => Some("F13"),
+        0x41..=0x5A => None,
+        0x30..=0x39 => None,
         _ => None,
     };
-    let key_label = key.unwrap_or_else(|| {
-        if (0x41..=0x5A).contains(&trigger) || (0x30..=0x39).contains(&trigger) {
-            char::from_u32(trigger).map(|c| c.to_string()).unwrap_or_default()
-        } else {
-            format!("VK 0x{trigger:02X}")
+    let key_label = match key {
+        Some(label) => label.to_string(),
+        None => {
+            if (0x41..=0x5A).contains(&trigger) || (0x30..=0x39).contains(&trigger) {
+                char::from_u32(trigger)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default()
+            } else {
+                format!("VK 0x{trigger:02X}")
+            }
         }
-    });
+    };
     if pushed {
         label.push_str(" + ");
     }
@@ -248,7 +265,7 @@ mod tests {
     fn fn_alias() {
         let spec = parse_hotkey("fn").unwrap();
         assert!(spec.fn_alias);
-        assert!(spec.matches_trigger(VK_F1 + 12, 0));
+        assert!(spec.matches_trigger(VK_F13, 0));
         assert!(spec.matches_trigger(0, 0x64));
     }
 

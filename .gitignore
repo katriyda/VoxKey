@@ -1,3 +1,5 @@
 target/
 .voxkey/
 .agents/worklog.md
+push_snapshot.py
+dist/

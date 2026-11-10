@@ -3,9 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use egui::{
-    Color32, CornerRadius, FontId, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2,
-};
+use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 pub const WINDOW_HEIGHT: f32 = 92.0;
 
@@ -89,7 +87,7 @@ impl Overlay {
     }
 
     pub fn is_fading(&self) -> bool {
-        self.closing || self.alpha > 0.001
+        self.alpha > 0.001
     }
 
     pub fn is_visible(&self) -> bool {
@@ -131,6 +129,7 @@ impl Overlay {
             if self.alpha <= 0.0 {
                 self.alpha = 0.0;
                 self.level = 0.0;
+                self.closing = false;
                 return true;
             }
         } else if !self.title.is_empty() || !self.detail.is_empty() {
@@ -150,11 +149,7 @@ impl Overlay {
         };
         let main_width = ctx.fonts(|fonts| {
             fonts
-                .layout_no_wrap(
-                    main.to_string(),
-                    FontId::proportional(14.5),
-                    Color32::WHITE,
-                )
+                .layout_no_wrap(main.to_string(), FontId::proportional(14.5), Color32::WHITE)
                 .size()
                 .x
         });
@@ -207,7 +202,7 @@ impl Overlay {
                     capsule,
                     radius,
                     Stroke::new(
-                        1.0,
+                        1.0_f32,
                         fade(Color32::from_rgba_unmultiplied(255, 255, 255, 30), animate),
                     ),
                     StrokeKind::Inside,
@@ -234,7 +229,7 @@ impl Overlay {
                         Pos2::new(divider_x, capsule.bottom() - 22.0),
                     ],
                     Stroke::new(
-                        1.0,
+                        1.0_f32,
                         fade(Color32::from_rgba_unmultiplied(255, 255, 255, 20), animate),
                     ),
                 );
@@ -252,8 +247,9 @@ impl Overlay {
                     _ => Color32::from_rgb(240, 243, 248),
                 };
                 let main_font = FontId::proportional(14.5);
+                let main_render = fade(main_color, animate);
                 let main_galley = ctx.fonts(|fonts| {
-                    fonts.layout_no_wrap(self.title.clone(), main_font, main_color)
+                    fonts.layout_no_wrap(self.title.clone(), main_font.clone(), main_render)
                 });
                 let main_pos = if has_detail {
                     Pos2::new(text_left, capsule.center().y - 19.0)
@@ -268,19 +264,16 @@ impl Overlay {
                 } else {
                     text_left
                 };
-                clipped_painter.galley(
-                    Pos2::new(main_x, main_pos.y),
-                    main_galley,
-                    fade(main_color, animate),
-                );
+                clipped_painter.galley(Pos2::new(main_x, main_pos.y), main_galley, main_render);
 
                 if has_detail {
                     let detail_color = Color32::from_rgb(151, 160, 177);
+                    let detail_render = fade(detail_color, animate);
                     let detail_galley = ctx.fonts(|fonts| {
                         fonts.layout_no_wrap(
                             self.detail.clone(),
                             FontId::proportional(10.5),
-                            detail_color,
+                            detail_render,
                         )
                     });
                     let x = if detail_galley.size().x > text_rect.width() {
@@ -291,17 +284,13 @@ impl Overlay {
                     clipped_painter.galley(
                         Pos2::new(x, capsule.center().y + 3.0),
                         detail_galley,
-                        fade(detail_color, animate),
+                        detail_render,
                     );
                 }
 
                 // Tiny state dot after the detail or at the right edge.
                 let dot_center = Pos2::new(capsule.right() - 22.0, capsule.center().y);
-                painter.circle_filled(
-                    dot_center,
-                    3.0,
-                    fade(accent, animate * 0.9),
-                );
+                painter.circle_filled(dot_center, 3.0, fade(accent, animate * 0.9));
             });
     }
 
@@ -316,10 +305,7 @@ impl Overlay {
         for (index, height) in self.bars.iter().enumerate() {
             let x = center.x + index as f32 * 9.0 - 22.0;
             let h = height * animate.clamp(0.35, 1.0);
-            let bar = Rect::from_center_size(
-                Pos2::new(x, center.y),
-                Vec2::new(5.0, h.max(4.0)),
-            );
+            let bar = Rect::from_center_size(Pos2::new(x, center.y), Vec2::new(5.0, h.max(4.0)));
             let color = if index == 2 {
                 accent
             } else {
@@ -351,10 +337,12 @@ fn fade(color: Color32, opacity: f32) -> Color32 {
 }
 
 fn sanitize_line(text: String) -> String {
-    text.replace(['\r', '\n', '\t'], " ").trim().to_string()
-}
-
-/// A small helper used by the settings header.
-pub fn accent_text(text: impl Into<String>) -> RichText {
-    RichText::new(text).color(Color32::from_rgb(125, 235, 176))
+    text.chars()
+        .map(|ch| match ch {
+            '\r' | '\n' | '\t' => ' ',
+            other => other,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
 }

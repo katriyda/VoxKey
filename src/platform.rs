@@ -8,25 +8,27 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallNextHookEx, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW,
-    GetCursorPos, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW,
-    PostQuitMessage, PostThreadMessageW, RegisterClassW, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu,
-    TranslateMessage, UnhookWindowsHookEx, UpdateWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    HICON, HMENU, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
-    LLKHF_UP, MENU_ITEM_FLAGS, MSG, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos,
+    GetForegroundWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW, PostMessageW,
+    PostQuitMessage, PostThreadMessageW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu, TranslateMessage,
+    UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HICON, HMENU, IDC_ARROW,
+    IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MENU_ITEM_FLAGS, MSG,
+    SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WM_COMMAND,
+    WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NULL, WM_QUIT,
+    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW,
 };
 
 use crate::config::Language;
@@ -74,13 +76,14 @@ impl Platform {
             let tx = tx.clone();
             let ctx = ctx.clone();
             let thread_id = Arc::clone(&hook_thread_id);
+            let spawn_tx = tx.clone();
+            let error_tx = tx.clone();
             std::thread::Builder::new()
                 .name("voxkey-hotkey".to_string())
-                .spawn(move || run_hook(thread_id, ctx, tx))
-                .map_err(|e| {
-                    let _ = tx.send(UiEvent::PlatformError(format!(
-                        "无法启动快捷键线程: {e}"
-                    )));
+                .spawn(move || run_hook(thread_id, ctx, spawn_tx))
+                .map_err(move |e| {
+                    let _ =
+                        error_tx.send(UiEvent::PlatformError(format!("无法启动快捷键线程: {e}")));
                 })
                 .ok()
         };
@@ -90,13 +93,13 @@ impl Platform {
             let ctx = ctx.clone();
             let state = Arc::clone(&tray_state);
             let thread_id = Arc::clone(&tray_thread_id);
+            let spawn_tx = tx.clone();
+            let error_tx = tx.clone();
             std::thread::Builder::new()
                 .name("voxkey-tray".to_string())
-                .spawn(move || run_tray(thread_id, ctx, tx, state, icon_bytes))
-                .map_err(|e| {
-                    let _ = tx.send(UiEvent::PlatformError(format!(
-                        "无法启动托盘线程: {e}"
-                    )));
+                .spawn(move || run_tray(thread_id, ctx, spawn_tx, state, icon_bytes))
+                .map_err(move |e| {
+                    let _ = error_tx.send(UiEvent::PlatformError(format!("无法启动托盘线程: {e}")));
                 })
                 .ok()
         };
@@ -193,7 +196,12 @@ impl HookRuntime {
         let Ok(spec) = self.hotkey.lock().map(|guard| guard.clone()) else {
             return;
         };
-        let is_trigger = spec.matches_trigger(info.vkCode, info.scanCode);
+        // Fn keys usually never reach Windows. On devices that do expose Fn as
+        // F13 (or one of the related scan codes), accept it as an extra trigger
+        // even when the configured reliable fallback is a different key.
+        const VK_F13: u32 = 0x7C;
+        let fn_probe = info.vkCode == VK_F13 || matches!(info.scanCode, 0x64 | 0x65);
+        let is_trigger = spec.matches_trigger(info.vkCode, info.scanCode) || fn_probe;
 
         if down && is_trigger && !self.recording.load(Ordering::SeqCst) {
             let active = self.modifiers.load(Ordering::SeqCst);
@@ -211,11 +219,7 @@ impl HookRuntime {
     }
 }
 
-unsafe extern "system" fn keyboard_hook_proc(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         if let Some(runtime) = HOOK_RUNTIME.get() {
             let info = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
@@ -225,11 +229,7 @@ unsafe extern "system" fn keyboard_hook_proc(
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
-fn run_hook(
-    thread_id: Arc<AtomicU32>,
-    ctx: egui::Context,
-    tx: std::sync::mpsc::Sender<UiEvent>,
-) {
+fn run_hook(thread_id: Arc<AtomicU32>, ctx: egui::Context, tx: std::sync::mpsc::Sender<UiEvent>) {
     unsafe {
         thread_id.store(GetCurrentThreadId(), Ordering::Release);
     }
@@ -248,12 +248,7 @@ fn run_hook(
     let hinstance = HINSTANCE::from(module);
 
     let hook = match unsafe {
-        SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            Some(keyboard_hook_proc),
-            Some(hinstance),
-            0,
-        )
+        SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), Some(hinstance), 0)
     } {
         Ok(hook) => hook,
         Err(e) => {
@@ -295,7 +290,7 @@ fn run_hook(
 const TRAY_CLASS: &str = "VoxKeyTrayWindow";
 const TRAY_WINDOW_TITLE: &str = "VoxKey Tray";
 const TRAY_UID: u32 = 1;
-const TRAY_CALLBACK: u32 = WM_APP + 1;
+const TRAY_CALLBACK: u32 = 0x8001; // WM_APP + 1
 
 const ID_LANG_BASE: u32 = 1;
 const ID_TOGGLE_LLM: u32 = 20;
@@ -303,10 +298,16 @@ const ID_SETTINGS: u32 = 30;
 const ID_EXIT: u32 = 40;
 
 struct TrayRuntime {
-    hwnd: HWND,
+    raw_hwnd: isize,
     ctx: egui::Context,
     tx: std::sync::mpsc::Sender<UiEvent>,
     state: Arc<Mutex<TrayState>>,
+}
+
+impl TrayRuntime {
+    fn hwnd(&self) -> HWND {
+        HWND(self.raw_hwnd as *mut c_void)
+    }
 }
 
 static TRAY_RUNTIME: OnceLock<Arc<TrayRuntime>> = OnceLock::new();
@@ -335,7 +336,7 @@ fn run_tray(
     };
     let hinstance = HINSTANCE::from(module);
 
-    let (icon, owns_icon) = create_tray_icon(icon_bytes);
+    let (mut icon, mut owns_icon) = create_tray_icon(icon_bytes);
     let class_name = wide(TRAY_CLASS);
     let title = wide(TRAY_WINDOW_TITLE);
     let cursor = unsafe { LoadCursorW(None, IDC_ARROW).unwrap_or_default() };
@@ -412,17 +413,33 @@ fn run_tray(
     fill_wide_buffer(&mut nid.szTip, "VoxKey · 按住快捷键说话");
 
     if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
-        send_ui(
-            &tx,
-            &ctx,
-            UiEvent::PlatformError("无法添加系统托盘图标".to_string()),
-        );
-        cleanup_tray(hwnd, icon, owns_icon, &nid);
-        return;
+        let first_error = unsafe { GetLastError() }.0;
+        // The embedded .ico is a nice-to-have; never let icon parsing prevent
+        // the tray from working. Retry once with the stock application icon.
+        if owns_icon {
+            unsafe {
+                let _ = DestroyIcon(icon);
+            }
+        }
+        icon = unsafe { LoadIconW(None, IDI_APPLICATION).unwrap_or_default() };
+        owns_icon = false;
+        nid.hIcon = icon;
+        if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
+            let second_error = unsafe { GetLastError() }.0;
+            send_ui(
+                &tx,
+                &ctx,
+                UiEvent::PlatformError(format!(
+                    "无法添加系统托盘图标（Win32 {first_error}/{second_error}）"
+                )),
+            );
+            cleanup_tray(hwnd, icon, owns_icon, &nid);
+            return;
+        }
     }
 
     let runtime = Arc::new(TrayRuntime {
-        hwnd,
+        raw_hwnd: hwnd.0 as isize,
         ctx: ctx.clone(),
         tx: tx.clone(),
         state,
@@ -505,7 +522,7 @@ fn handle_tray_event(hwnd: HWND, event: TrayEvent) {
             );
         }
         TrayEvent::ShowMenu => {
-            if runtime.hwnd != hwnd {
+            if runtime.hwnd() != hwnd {
                 return;
             }
             show_tray_menu(runtime);
@@ -518,11 +535,7 @@ fn show_tray_menu(runtime: &TrayRuntime) {
         Ok(menu) => menu,
         Err(_) => return,
     };
-    let state = runtime
-        .state
-        .lock()
-        .map(|guard| *guard)
-        .unwrap_or_default();
+    let state = runtime.state.lock().map(|guard| *guard).unwrap_or_default();
 
     append_menu(menu, 0x1, 0, "VoxKey", false); // grayed header
     append_menu(menu, 0x800, 0, "", false); // separator
@@ -536,7 +549,13 @@ fn show_tray_menu(runtime: &TrayRuntime) {
         );
     }
     append_menu(menu, 0x800, 0, "", false);
-    append_menu(menu, 0, ID_TOGGLE_LLM as usize, "LLM 纠错", state.llm_enabled);
+    append_menu(
+        menu,
+        0,
+        ID_TOGGLE_LLM as usize,
+        "LLM 纠错",
+        state.llm_enabled,
+    );
     append_menu(menu, 0, ID_SETTINGS as usize, "设置…", false);
     append_menu(menu, 0x800, 0, "", false);
     append_menu(menu, 0, ID_EXIT as usize, "退出", false);
@@ -544,17 +563,17 @@ fn show_tray_menu(runtime: &TrayRuntime) {
     let mut point = POINT::default();
     unsafe {
         let _ = GetCursorPos(&mut point);
-        let _ = SetForegroundWindow(runtime.hwnd);
+        let _ = SetForegroundWindow(runtime.hwnd());
         let _ = TrackPopupMenu(
             menu,
             TRACK_POPUP_MENU_FLAGS(0x0002 | 0x0020),
             point.x,
             point.y,
             None,
-            runtime.hwnd,
+            runtime.hwnd(),
             None,
         );
-        let _ = PostMessageW(Some(runtime.hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(runtime.hwnd()), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
     }
 }
@@ -597,11 +616,7 @@ fn handle_menu_command(id: u32) {
             );
         }
         ID_EXIT => {
-            send_ui(
-                &runtime.tx,
-                &runtime.ctx,
-                UiEvent::Tray(TrayAction::Quit),
-            );
+            send_ui(&runtime.tx, &runtime.ctx, UiEvent::Tray(TrayAction::Quit));
         }
         _ => {}
     }
@@ -629,13 +644,23 @@ fn icon_from_ico(bytes: &[u8]) -> Option<HICON> {
         if entry + 16 > bytes.len() {
             break;
         }
-        let width = if bytes[entry] == 0 { 256u32 } else { bytes[entry] as u32 };
+        let width = if bytes[entry] == 0 {
+            256u32
+        } else {
+            bytes[entry] as u32
+        };
         let size = read_u32(bytes, entry + 8)? as usize;
         let offset = read_u32(bytes, entry + 12)? as usize;
         if offset + size > bytes.len() {
             continue;
         }
-        let score = if width == 32 { 100 } else if width <= 64 { 50 } else { 10 };
+        let score = if width == 32 {
+            100
+        } else if width <= 64 {
+            50
+        } else {
+            10
+        };
         if best.map(|(s, _, _)| score > s).unwrap_or(true) {
             best = Some((score, offset, size));
         }
@@ -672,20 +697,39 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 /// Marks the hidden-by-default overlay window as non-activating. Call it while
 /// the overlay is still hidden, so showing it never steals focus from the app
 /// receiving dictated text.
-pub fn configure_overlay_window() -> bool {
-    let title = wide("VoxKey Overlay");
-    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
-        Ok(hwnd) => hwnd,
-        Err(_) => return false,
-    };
+pub fn configure_overlay_window(hwnd: HWND) {
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let new_style = style | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
+        let new_style = (style | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize))
+            & !(WS_EX_APPWINDOW.0 as isize);
         if new_style != style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
         }
     }
-    true
+}
+
+pub fn foreground_window() -> Option<HWND> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        None
+    } else {
+        Some(hwnd)
+    }
+}
+
+pub fn set_foreground_window(hwnd: HWND) {
+    unsafe {
+        let _ = SetForegroundWindow(hwnd);
+    }
 }
 
 /// Primary monitor work area in physical pixels: (left, top, width, height).

@@ -1,0 +1,20 @@
+//! Best-effort diagnostics for release builds, which have no console.
+
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub fn error(message: &str) {
+    let path = crate::config::data_dir().join("voxkey.log");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let _ = writeln!(file, "[{seconds}] ERROR: {message}");
+}

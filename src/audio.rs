@@ -1,6 +1,6 @@
 //! Microphone capture and linear resampling used by the ASR worker.
 
-use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -42,7 +42,7 @@ impl Recorder {
                 let err_fn = make_error_callback(Arc::clone(&error), device_name.clone());
                 device.build_input_stream(
                     &config,
-                    move |data: &[f32], _| push_mono(data, channels, buffer, level, |s| s),
+                    move |data: &[f32], _| push_mono(data, channels, &buffer, &level, |s| s),
                     err_fn,
                     None,
                 )
@@ -54,7 +54,7 @@ impl Recorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[i16], _| {
-                        push_mono(data, channels, buffer, level, |s| s as f32 / 32768.0)
+                        push_mono(data, channels, &buffer, &level, |s| s as f32 / 32768.0)
                     },
                     err_fn,
                     None,
@@ -67,7 +67,7 @@ impl Recorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[u16], _| {
-                        push_mono(data, channels, buffer, level, |s| {
+                        push_mono(data, channels, &buffer, &level, |s| {
                             (s as f32 - 32768.0) / 32768.0
                         })
                     },
@@ -82,7 +82,7 @@ impl Recorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[i32], _| {
-                        push_mono(data, channels, buffer, level, |s| {
+                        push_mono(data, channels, &buffer, &level, |s| {
                             s as f32 / 2_147_483_648.0
                         })
                     },
@@ -97,7 +97,7 @@ impl Recorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[u8], _| {
-                        push_mono(data, channels, buffer, level, |s| {
+                        push_mono(data, channels, &buffer, &level, |s| {
                             (s as f32 - 128.0) / 128.0
                         })
                     },
@@ -111,9 +111,7 @@ impl Recorder {
         }
         .map_err(|e| format!("无法打开麦克风: {e}"))?;
 
-        stream
-            .play()
-            .map_err(|e| format!("无法开始录音: {e}"))?;
+        stream.play().map_err(|e| format!("无法开始录音: {e}"))?;
 
         Ok(Self {
             stream: Some(stream),
@@ -174,8 +172,8 @@ fn make_error_callback(
 fn push_mono<T, F>(
     data: &[T],
     channels: usize,
-    buffer: Arc<Mutex<Vec<f32>>>,
-    level: Arc<AtomicU32>,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+    level: &Arc<AtomicU32>,
     to_float: F,
 ) where
     T: Copy,
