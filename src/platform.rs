@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
@@ -351,7 +353,7 @@ fn run_tray(
     };
     let hinstance = HINSTANCE::from(module);
 
-    let (icon, owns_icon) = create_tray_icon(icon_bytes);
+    let (mut icon, mut owns_icon) = create_tray_icon(icon_bytes);
     let class_name = wide(TRAY_CLASS);
     let title = wide(TRAY_WINDOW_TITLE);
     let cursor = unsafe { LoadCursorW(None, IDC_ARROW).unwrap_or_default() };
@@ -428,13 +430,29 @@ fn run_tray(
     fill_wide_buffer(&mut nid.szTip, "VoxKey · 按住快捷键说话");
 
     if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
-        send_ui(
-            &tx,
-            &ctx,
-            UiEvent::PlatformError("无法添加系统托盘图标".to_string()),
-        );
-        cleanup_tray(hwnd, icon, owns_icon, &nid);
-        return;
+        let first_error = unsafe { GetLastError() }.0;
+        // The embedded .ico is a nice-to-have; never let icon parsing prevent
+        // the tray from working. Retry once with the stock application icon.
+        if owns_icon {
+            unsafe {
+                let _ = DestroyIcon(icon);
+            }
+        }
+        icon = unsafe { LoadIconW(None, IDI_APPLICATION).unwrap_or_default() };
+        owns_icon = false;
+        nid.hIcon = icon;
+        if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
+            let second_error = unsafe { GetLastError() }.0;
+            send_ui(
+                &tx,
+                &ctx,
+                UiEvent::PlatformError(format!(
+                    "无法添加系统托盘图标（Win32 {first_error}/{second_error}）"
+                )),
+            );
+            cleanup_tray(hwnd, icon, owns_icon, &nid);
+            return;
+        }
     }
 
     let runtime = Arc::new(TrayRuntime {

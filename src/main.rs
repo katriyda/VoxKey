@@ -8,6 +8,7 @@ mod engine;
 mod events;
 mod hotkey;
 mod llm;
+mod logging;
 mod model;
 mod overlay;
 mod platform;
@@ -57,7 +58,9 @@ fn main() {
     );
 
     if let Err(err) = result {
-        show_error(&format!("VoxKey 启动失败：{err}"));
+        let message = format!("VoxKey 启动失败：{err}");
+        logging::error(&message);
+        show_error(&message);
     }
 }
 

@@ -67,6 +67,9 @@ pub fn spawn(
 }
 
 fn emit(tx: &Sender<UiEvent>, ctx: &egui::Context, event: EngineEvent) {
+    if let EngineEvent::Error(ref message) = event {
+        crate::logging::error(message);
+    }
     let _ = tx.send(UiEvent::Engine(event));
     ctx.request_repaint();
 }

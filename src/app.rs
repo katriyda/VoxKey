@@ -108,6 +108,7 @@ impl VoxKeyApp {
                     });
                 }
                 UiEvent::PlatformError(err) => {
+                    crate::logging::error(&err);
                     self.overlay.present(
                         OverlayKind::Error,
                         "VoxKey 启动异常",
