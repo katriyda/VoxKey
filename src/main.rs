@@ -42,7 +42,6 @@ fn main() {
             .with_active(false)
             .with_always_on_top()
             .with_taskbar(false)
-            .with_mouse_passthrough(true)
             .with_has_shadow(false)
             .with_drag_and_drop(false),
         renderer: eframe::Renderer::Glow,
