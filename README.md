@@ -167,10 +167,11 @@ src/hotkey.rs      快捷键解析
 4b75fe6544c553b9b6aef251c843936893f3a0c47ddcb2741e197af6cdefbc5e
 ```
 
-2026-11-11 的悬浮窗可见性修复构建（本地 `cargo build --release`，尚未经过 CI）：
+2026-11-11 的悬浮窗可见性修复与 `v0.1.0` 发布构建同样由 CI 生成，运行
+[Build VoxKey #42867746307](https://github.com/katriyda/VoxKey/actions/runs/42867746307)，`v0.1.0` Release 附带的 exe SHA-256：
 
 ```text
-e4151853afdebd710dbb0855a44ef35a70cfd8a77251b1619ae1f7c093d86a10
+a8d1e2bc9b6d335c783b5398b523465c11f481905abe93ec037b0c4f6670f591
 ```
 
 在本机（当前受限的低完整性桌面会话）做过以下运行时验证：
