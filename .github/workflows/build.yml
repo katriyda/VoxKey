@@ -66,7 +66,7 @@ jobs:
           $hash = (Get-FileHash $worker -Algorithm SHA256).Hash.ToLowerInvariant()
           $size = (Get-Item $worker).Length
           Write-Output "worker: $size bytes, sha256 $hash"
-          if ($size -lt 4_000_000) { throw "worker binary is implausibly small ($size bytes)" }
+          if ($size -lt 4000000) { throw "worker binary is implausibly small ($size bytes)" }
           "VOXKEY_ASR_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build release executable
@@ -93,7 +93,7 @@ jobs:
           # (which would push it back over 20 MB) before the release is cut.
           $uiSize = (Get-Item "target\\release\\VoxKey.exe").Length
           Write-Output "VoxKey.exe size: $uiSize bytes"
-          if ($uiSize -gt 16_000_000) {
+          if ($uiSize -gt 16000000) {
             throw "VoxKey.exe is $uiSize bytes; the UI must stay under 16 MB"
           }
           $workerSize = (Get-Item "target\\release\\VoxKey-asr.exe").Length
