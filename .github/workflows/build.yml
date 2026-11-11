@@ -22,6 +22,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Verify tag matches Cargo.toml version
+        # The in-app updater compares the release tag against the version
+        # compiled into the binary (`CARGO_PKG_VERSION`). A mismatch makes
+        # every build report itself as older than its own release.
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+          if (-not $match) { throw "Cannot read package version from Cargo.toml" }
+          $version = $match.Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+          }
+
       - name: Install Rust
         # Pinned to the toolchain in mise.toml so CI and local builds agree.
         uses: dtolnay/rust-toolchain@1.99.1
@@ -57,11 +71,26 @@ jobs:
           }
 
       - name: Smoke test version flag
+        # The in-app updater validates a downloaded build by running it with
+        # `--version` and reading stdout, so this reproduces that exact path.
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath "target\release\VoxKey.exe" -ArgumentList "--version" -Wait -PassThru -NoNewWindow
+          $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+          $version = $match.Matches[0].Groups[1].Value
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Resolve-Path "target\release\VoxKey.exe").Path
+          $psi.Arguments = "--version"
+          $psi.RedirectStandardOutput = $true
+          $psi.UseShellExecute = $false
+          $process = [System.Diagnostics.Process]::Start($psi)
+          $stdout = $process.StandardOutput.ReadToEnd()
+          $process.WaitForExit()
+          Write-Output "stdout: $stdout"
           if ($process.ExitCode -ne 0) {
             throw "VoxKey.exe --version exited with $($process.ExitCode)"
+          }
+          if ($stdout.Trim() -ne "VoxKey $version") {
+            throw "VoxKey.exe --version printed '$($stdout.Trim())', expected 'VoxKey $version'"
           }
 
       - name: Upload single-file artifact

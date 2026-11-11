@@ -4,11 +4,15 @@ use egui::{Color32, RichText};
 
 use crate::config::{Config, DEFAULT_API_BASE, DEFAULT_MODEL, Language};
 use crate::hotkey::parse_hotkey;
+use crate::update::{self, UpdateUiState};
 
 #[derive(Default)]
 pub struct SettingsAction {
     pub test: bool,
     pub save: bool,
+    pub check_update: bool,
+    pub download_update: bool,
+    pub open_release: bool,
 }
 
 pub struct SettingsState {
@@ -35,7 +39,11 @@ impl SettingsState {
     }
 }
 
-pub fn draw(ui: &mut egui::Ui, state: &mut SettingsState) -> SettingsAction {
+pub fn draw(
+    ui: &mut egui::Ui,
+    state: &mut SettingsState,
+    update_state: &mut UpdateUiState,
+) -> SettingsAction {
     let mut action = SettingsAction::default();
     let theme_bg = Color32::from_rgb(18, 20, 27);
     let muted = Color32::from_rgb(151, 159, 176);
@@ -194,6 +202,89 @@ pub fn draw(ui: &mut egui::Ui, state: &mut SettingsState) -> SettingsAction {
                     });
 
                     if let Some((ok, message)) = &state.message {
+                        let color = if *ok {
+                            Color32::from_rgb(124, 231, 174)
+                        } else {
+                            Color32::from_rgb(255, 150, 140)
+                        };
+                        ui.add_space(7.0);
+                        ui.label(RichText::new(message).size(11.5).color(color));
+                    }
+
+                    ui.add_space(14.0);
+                    section(ui, "更新");
+                    ui.horizontal(|ui| {
+                        ui.label(format!("当前版本 v{}", update::current_version()));
+                        if update_state.checking {
+                            ui.spinner();
+                            ui.label(RichText::new("正在检查…").size(11.0).color(muted));
+                        } else if ui.button("检查更新").clicked() {
+                            action.check_update = true;
+                        }
+                    });
+                    if let Some(info) = &update_state.info {
+                        ui.add_space(5.0);
+                        ui.label(
+                            RichText::new(format!("发现新版本 v{}", info.version))
+                                .size(13.0)
+                                .strong()
+                                .color(Color32::from_rgb(124, 231, 174)),
+                        );
+                        if !info.notes.trim().is_empty() {
+                            egui::ScrollArea::vertical()
+                                .id_salt("update_notes")
+                                .max_height(120.0)
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(info.notes.trim()).size(10.5).color(muted),
+                                    );
+                                });
+                        }
+                        ui.add_space(4.0);
+                        if update_state.downloading {
+                            let (done, total) =
+                                update_state.progress.unwrap_or((0, info.asset_size.max(1)));
+                            let fraction = if total > 0 {
+                                done as f32 / total as f32
+                            } else {
+                                0.0
+                            };
+                            ui.add(
+                                egui::ProgressBar::new(fraction)
+                                    .desired_width(ui.available_width())
+                                    .text(format!(
+                                        "下载中 {:.1} / {:.1} MB",
+                                        done as f64 / 1_000_000.0,
+                                        total as f64 / 1_000_000.0
+                                    )),
+                            );
+                        } else {
+                            ui.horizontal(|ui| {
+                                if ui.button("下载并重启更新").clicked() {
+                                    action.download_update = true;
+                                }
+                                if ui.button("在 GitHub 查看").clicked() {
+                                    action.open_release = true;
+                                }
+                            });
+                        }
+                        ui.label(
+                            RichText::new(
+                                "下载并校验新版 VoxKey.exe 后，会自动替换当前程序并重启。若程序所在目录不可写，会明确提示失败，不会留下半个更新。",
+                            )
+                            .size(10.5)
+                            .color(muted),
+                        );
+                    } else if !update_state.checking {
+                        ui.label(
+                            RichText::new(format!("更新来源：{}", update::releases_page()))
+                                .size(10.0)
+                                .color(muted),
+                        );
+                    }
+
+                    if let Some((ok, message)) = &update_state.message {
                         let color = if *ok {
                             Color32::from_rgb(124, 231, 174)
                         } else {

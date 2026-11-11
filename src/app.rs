@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -6,12 +7,13 @@ use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Pos2, Vec2};
 
 use crate::config::Config;
 use crate::engine::{self, EngineHandle};
-use crate::events::{EngineEvent, TrayAction, UiEvent};
+use crate::events::{EngineEvent, TrayAction, UiEvent, UpdateEvent};
 use crate::hotkey::parse_hotkey;
 use crate::llm;
 use crate::overlay::{Overlay, OverlayKind, WINDOW_HEIGHT};
 use crate::platform::{self, Platform, TrayState};
 use crate::settings::{self, SettingsAction, SettingsState};
+use crate::update::{self, UpdateUiState};
 
 const SETTINGS_VIEWPORT_NAME: &str = "voxkey-settings";
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../assets/voxkey.ico");
@@ -37,6 +39,7 @@ pub struct VoxKeyApp {
     show_settings: bool,
     focus_settings: bool,
     settings: SettingsState,
+    update: UpdateUiState,
     last_frame: Instant,
     exiting: bool,
 }
@@ -88,6 +91,7 @@ impl VoxKeyApp {
             show_settings: false,
             focus_settings: false,
             settings: SettingsState::from_config(&Config::default()),
+            update: UpdateUiState::default(),
             last_frame: Instant::now(),
             exiting: false,
         })
@@ -107,6 +111,7 @@ impl VoxKeyApp {
                         Err(err) => (false, format!("测试失败：{err}")),
                     });
                 }
+                UiEvent::Update(event) => self.on_update_event(ctx, event),
                 UiEvent::PlatformError(err) => {
                     crate::logging::error(&err);
                     self.overlay.present(
@@ -166,13 +171,10 @@ impl VoxKeyApp {
 
     fn on_tray_action(&mut self, ctx: &egui::Context, action: TrayAction) {
         match action {
-            TrayAction::OpenSettings => {
-                if !self.show_settings {
-                    self.settings.reset_from(&self.config);
-                    self.show_settings = true;
-                }
-                self.focus_settings = true;
-                ctx.request_repaint();
+            TrayAction::OpenSettings => self.open_settings(ctx),
+            TrayAction::CheckUpdate => {
+                self.open_settings(ctx);
+                self.start_update_check();
             }
             TrayAction::ToggleLlm => {
                 self.config.llm_enabled = !self.config.llm_enabled;
@@ -201,6 +203,121 @@ impl VoxKeyApp {
                 }
             }
             TrayAction::Quit => self.request_quit(ctx),
+        }
+    }
+
+    fn open_settings(&mut self, ctx: &egui::Context) {
+        if !self.show_settings {
+            self.settings.reset_from(&self.config);
+            self.show_settings = true;
+        }
+        self.focus_settings = true;
+        ctx.request_repaint();
+    }
+
+    fn start_update_check(&mut self) {
+        if self.update.checking || self.update.downloading {
+            return;
+        }
+        self.update.checking = true;
+        self.update.info = None;
+        self.update.progress = None;
+        self.update.message = None;
+
+        let tx = self.ui_tx.clone();
+        let ctx = self.ctx.clone();
+        let spawn = std::thread::Builder::new()
+            .name("voxkey-update-check".to_string())
+            .spawn(move || {
+                let result = update::check_blocking();
+                let _ = tx.send(UiEvent::Update(UpdateEvent::CheckFinished(result)));
+                ctx.request_repaint();
+            });
+        if let Err(err) = spawn {
+            self.update.checking = false;
+            self.update.message = Some((false, format!("无法启动更新检查：{err}")));
+        }
+    }
+
+    fn start_update_download(&mut self) {
+        let Some(info) = self.update.info.clone() else {
+            return;
+        };
+        if self.update.downloading {
+            return;
+        }
+        self.update.downloading = true;
+        self.update.progress = Some((0, info.asset_size));
+        self.update.message = None;
+        self.ctx.request_repaint();
+
+        let tx = self.ui_tx.clone();
+        let ctx = self.ctx.clone();
+        let spawn = std::thread::Builder::new()
+            .name("voxkey-update-download".to_string())
+            .spawn(move || {
+                let mut report = |downloaded: u64, total: u64| {
+                    let _ = tx.send(UiEvent::Update(UpdateEvent::Progress { downloaded, total }));
+                    ctx.request_repaint();
+                };
+                let event = match update::download_blocking(&info, &mut report) {
+                    Ok(path) => UpdateEvent::Downloaded(path),
+                    Err(err) => UpdateEvent::Failed(err),
+                };
+                let _ = tx.send(UiEvent::Update(event));
+                ctx.request_repaint();
+            });
+        if let Err(err) = spawn {
+            self.update.downloading = false;
+            self.update.progress = None;
+            self.update.message = Some((false, format!("无法启动更新下载：{err}")));
+        }
+    }
+
+    fn on_update_event(&mut self, ctx: &egui::Context, event: UpdateEvent) {
+        match event {
+            UpdateEvent::CheckFinished(Ok(None)) => {
+                self.update.checking = false;
+                self.update.info = None;
+                self.update.message =
+                    Some((true, format!("已是最新版本 v{}", update::current_version())));
+            }
+            UpdateEvent::CheckFinished(Ok(Some(info))) => {
+                self.update.checking = false;
+                self.update.message = None;
+                self.update.info = Some(info);
+            }
+            UpdateEvent::CheckFinished(Err(err)) => {
+                self.update.checking = false;
+                self.update.message = Some((false, format!("检查更新失败：{err}")));
+            }
+            UpdateEvent::Progress { downloaded, total } => {
+                self.update.progress = Some((downloaded, total));
+            }
+            UpdateEvent::Downloaded(path) => {
+                self.update.downloading = false;
+                self.update.progress = None;
+                self.apply_update(ctx, &path);
+            }
+            UpdateEvent::Failed(err) => {
+                self.update.downloading = false;
+                self.update.progress = None;
+                self.update.message = Some((false, format!("下载更新失败：{err}")));
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn apply_update(&mut self, ctx: &egui::Context, path: &Path) {
+        match update::install_and_restart(path) {
+            Ok(()) => {
+                crate::logging::info("已启动新版本，准备退出旧进程");
+                self.update.message = Some((true, "新版本已启动，VoxKey 即将重启…".to_string()));
+                self.request_quit(ctx);
+            }
+            Err(err) => {
+                self.update.message = Some((false, format!("安装更新失败：{err}")));
+            }
         }
     }
 
@@ -423,7 +540,7 @@ impl VoxKeyApp {
             if ui.ctx().input(|input| input.viewport().close_requested()) {
                 close_requested = true;
             }
-            settings::draw(ui, &mut self.settings)
+            settings::draw(ui, &mut self.settings, &mut self.update)
         });
 
         if self.focus_settings {
@@ -567,7 +684,21 @@ impl eframe::App for VoxKeyApp {
             if action.save {
                 self.save_settings();
             }
+            if action.check_update {
+                self.start_update_check();
+            }
+            if action.download_update {
+                self.start_update_download();
+            }
+            if action.open_release {
+                if let Some(info) = &self.update.info {
+                    platform::open_url(&info.page_url);
+                }
+            }
             if self.settings.testing {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+            if self.update.checking || self.update.downloading {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
