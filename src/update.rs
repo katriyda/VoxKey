@@ -46,6 +46,8 @@ pub struct ReleaseInfo {
     pub page_url: String,
     pub asset_url: String,
     pub asset_size: u64,
+    /// GitHub-provided `sha256:<hex>` digest of the asset, when available.
+    pub asset_digest: Option<String>,
 }
 
 /// UI-side update state. Owned by the app, rendered by the settings window.
@@ -73,6 +75,8 @@ struct ApiAsset {
     name: String,
     size: u64,
     browser_download_url: String,
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 fn http_runtime() -> Result<tokio::runtime::Runtime, String> {
@@ -85,7 +89,6 @@ fn http_runtime() -> Result<tokio::runtime::Runtime, String> {
 fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(300))
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| format!("创建更新客户端失败: {e}"))
@@ -149,6 +152,7 @@ async fn check_async() -> Result<Option<ReleaseInfo>, String> {
         page_url: release.html_url,
         asset_url: asset.browser_download_url.clone(),
         asset_size: asset.size,
+        asset_digest: asset.digest.clone(),
     }))
 }
 
@@ -284,6 +288,20 @@ pub fn verify_binary(path: &Path, info: &ReleaseInfo) -> Result<(), String> {
             ));
         }
         None => return Err("更新文件不是有效的 Windows 可执行文件".to_string()),
+    }
+
+    if let Some(digest) = info
+        .asset_digest
+        .as_deref()
+        .and_then(|digest| digest.strip_prefix("sha256:"))
+        .map(|hex| hex.trim().to_ascii_lowercase())
+    {
+        let actual = sha256_file(path)?;
+        if actual != digest {
+            return Err(format!(
+                "更新文件 SHA-256 校验失败（期望 {digest}，实际 {actual}）"
+            ));
+        }
     }
 
     let output = std::process::Command::new(path)
@@ -436,6 +454,14 @@ fn pe_machine(bytes: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes([header[4], header[5]]))
 }
 
+/// SHA-256 of a file as lowercase hex. Shares the streaming implementation with
+/// the model verifier (`src/sha256.rs`) so a 40 MB asset is never fully buffered.
+fn sha256_file(path: &Path) -> Result<String, String> {
+    crate::sha256::hash_file(path)
+        .map(|digest| crate::sha256::hex(&digest))
+        .map_err(|e| format!("无法读取更新文件以便校验：{e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +483,18 @@ mod tests {
         assert_eq!(normalize_version("v0.1.2-rc1").as_deref(), Some("0.1.2"));
         assert_eq!(normalize_version("0.1").as_deref(), None);
         assert_eq!(normalize_version("release"), None);
+    }
+
+    #[test]
+    fn hashes_known_vectors() {
+        assert_eq!(
+            crate::sha256::hex(&crate::sha256::digest(b"")),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            crate::sha256::hex(&crate::sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]

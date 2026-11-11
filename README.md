@@ -160,6 +160,7 @@ src/overlay.rs     胶囊悬浮窗绘制与动画
 src/settings.rs    Settings UI
 src/zh.rs          简体→繁体单字转换
 src/hotkey.rs      快捷键解析
+src/update.rs      应用内更新：GitHub Release 检查、下载校验、替换重启
 ```
 
 ## 验证状态（2026-11-10）
@@ -209,6 +210,22 @@ a8d1e2bc9b6d335c783b5398b523465c11f481905abe93ec037b0c4f6670f591
 根因：`main.rs` 里的 `with_mouse_passthrough(true)` 会让 winit 给窗口加上 `WS_EX_LAYERED`（`window_state.rs` 中 `IGNORE_CURSOR_EVENT` 分支），却从不设置 layered 属性。一个没有属性的 layered 窗口不会被合成，窗口存在、内容在渲染、`IsWindowVisible` 为真，但屏幕上什么都看不到。
 
 修复：去掉 `with_mouse_passthrough`，改为在窗口过程里对 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，既保留真实的逐像素透明（DWM blur-behind），又保持鼠标穿透。
+
+## 应用内更新（2026-11-11）
+
+不再需要手动去 GitHub 下载 exe 再替换文件。设置窗口底部新增“更新”区块，托盘右键菜单也提供“检查更新…”：
+
+1. **检查更新**：请求 GitHub Releases API，取最新非预发布 Release，把 tag（如 `v0.1.1`）与编译进程序的 `CARGO_PKG_VERSION` 按语义化数字比较。
+2. **下载并重启更新**：下载 Release 中的 `VoxKey.exe` 到 `%APPDATA%\VoxKey\updates\`，显示进度。
+3. **安装前校验**：文件大小必须与 Release 资产元数据一致；必须是 `MZ` + `PE` 且 machine 为 `x86-64`；若 GitHub 资产带有 `digest`（`sha256:…`），用 Windows CNG 重新计算并比对 SHA-256；最后用 `--version` 自检下载到的程序，输出必须正好是该 Release 的版本号。任一校验失败都会删除文件并中止，不会替换正在运行的程序。
+4. **替换并重启**：先把新版复制到 `VoxKey.exe.new`，把正在运行的 `VoxKey.exe` 重命名为 `VoxKey.exe.old`（Windows 允许重命名运行中的可执行文件），再把 `.new` 改名回 `VoxKey.exe` 并启动它，旧进程随后退出。失败会自动回滚；下次启动会清理 `.old` / `.new` 与残留的 `.part` 文件。
+
+实现位于 `src/update.rs`，网络请求在独立线程 + current-thread Tokio 运行时中执行，不阻塞 UI。设计与取舍：
+
+- 更新源固定为 `https://github.com/katriyda/VoxKey`，只有 HTTPS，没有第三方镜像或自签名证书。
+- 未接入 Authenticode 签名校验（当前 Release 本身未签名）。完整性依赖 TLS、GitHub 资产大小、PE 校验和“下载到的程序自己报告的版本号”，这与当前无签名发布方式一致；将来若做代码签名，可在这里加入签名校验。
+- 安装目录必须对当前用户可写。VoxKey 是绿色单文件程序，放在 `Program Files` 或以管理员身份运行时替换会失败，界面会给出具体错误而不是静默退出。
+- 发布流程要求 **git tag 与 `Cargo.toml` 的 `version` 一致**（例如 `version = "0.1.1"` 对应 `v0.1.1`）。CI 会强制校验，否则更新逻辑会把同一个版本一直当成“有新版”。
 
 ## 已知限制（如实说明）
 
