@@ -3,37 +3,37 @@
 
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{
     GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CallNextHookEx, CallWindowProcW, CreateIconFromResourceEx, CreatePopupMenu,
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-    GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, LoadCursorW, LoadIconW,
-    PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, TrackPopupMenu,
-    TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, GWL_EXSTYLE,
-    HICON, HMENU, HTTRANSPARENT, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS, KBDLLHOOKSTRUCT,
-    LLKHF_INJECTED, MENU_ITEM_FLAGS, MSG, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TRACK_POPUP_MENU_FLAGS,
-    WH_KEYBOARD_LL, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
-    WM_NCHITTEST, WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC,
+    AppendMenuW, CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CallWindowProcW, CreateIconFromResourceEx,
+    CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow,
+    DispatchMessageW, GWL_EXSTYLE, GWLP_WNDPROC, GetCursorPos, GetForegroundWindow, GetMessageW,
+    GetWindowLongPtrW, HICON, HMENU, HTTRANSPARENT, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS,
+    KBDLLHOOKSTRUCT, LLKHF_INJECTED, LoadCursorW, LoadIconW, MENU_ITEM_FLAGS, MSG, PostMessageW,
+    PostQuitMessage, PostThreadMessageW, RegisterClassW, SPI_GETWORKAREA, SWP_FRAMECHANGED,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW,
+    TRACK_POPUP_MENU_FLAGS, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCHITTEST,
+    WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC,
     WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
+use windows::core::PCWSTR;
 
 use crate::config::Language;
 use crate::events::{TrayAction, UiEvent};
-use crate::hotkey::{modifier_family, HotkeySpec};
+use crate::hotkey::{HotkeySpec, modifier_family};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TrayState {
@@ -220,11 +220,11 @@ impl HookRuntime {
 }
 
 unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 {
-        if let Some(runtime) = HOOK_RUNTIME.get() {
-            let info = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
-            runtime.handle_key(wparam.0 as u32, info);
-        }
+    if code >= 0
+        && let Some(runtime) = HOOK_RUNTIME.get()
+    {
+        let info = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        runtime.handle_key(wparam.0 as u32, info);
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
@@ -754,11 +754,7 @@ pub fn configure_overlay_window(hwnd: HWND) {
 
 pub fn foreground_window() -> Option<HWND> {
     let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.is_invalid() {
-        None
-    } else {
-        Some(hwnd)
-    }
+    if hwnd.is_invalid() { None } else { Some(hwnd) }
 }
 
 pub fn set_foreground_window(hwnd: HWND) {

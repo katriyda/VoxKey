@@ -2,11 +2,11 @@
 //! scope, so the config file never contains a plaintext key.
 
 use std::slice;
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{LocalFree, HLOCAL};
+use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
+    CRYPT_INTEGER_BLOB, CryptProtectData, CryptUnprotectData,
 };
+use windows::core::PCWSTR;
 
 const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
 
@@ -93,11 +93,11 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err("保存的密钥数据长度非法".to_string());
     }
     let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for chunk in hex.as_bytes().chunks_exact(2) {
+    for chunk in hex.as_bytes().as_chunks::<2>().0 {
         let hi = hex_nibble(chunk[0])?;
         let lo = hex_nibble(chunk[1])?;
         bytes.push((hi << 4) | lo);

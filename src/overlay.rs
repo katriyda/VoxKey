@@ -117,11 +117,11 @@ impl Overlay {
             *bar += (target - *bar) * (dt * 18.0).min(1.0);
         }
 
-        if let Some(deadline) = self.hide_at {
-            if Instant::now() >= deadline {
-                self.hide_at = None;
-                self.closing = true;
-            }
+        if let Some(deadline) = self.hide_at
+            && Instant::now() >= deadline
+        {
+            self.hide_at = None;
+            self.closing = true;
         }
 
         if self.closing {
@@ -147,7 +147,7 @@ impl Overlay {
         } else {
             &self.title
         };
-        let main_width = ctx.fonts(|fonts| {
+        let main_width = ctx.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(main.to_string(), FontId::proportional(14.5), Color32::WHITE)
                 .size()
@@ -156,7 +156,7 @@ impl Overlay {
         let detail_width = if self.detail.is_empty() {
             0.0
         } else {
-            ctx.fonts(|fonts| {
+            ctx.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(
                         self.detail.clone(),
@@ -170,13 +170,13 @@ impl Overlay {
         (f32::max(main_width, detail_width) + 152.0).clamp(304.0, 640.0)
     }
 
-    pub fn render(&self, ctx: &egui::Context) {
+    pub fn render(&self, ui: &mut egui::Ui) {
         if self.alpha <= 0.001 {
             return;
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 let screen = ui.max_rect();
                 let animate = self.alpha.clamp(0.0, 1.0);
                 let slide = (1.0 - animate) * 10.0;
@@ -248,7 +248,7 @@ impl Overlay {
                 };
                 let main_font = FontId::proportional(14.5);
                 let main_render = fade(main_color, animate);
-                let main_galley = ctx.fonts(|fonts| {
+                let main_galley = ui.ctx().fonts_mut(|fonts| {
                     fonts.layout_no_wrap(self.title.clone(), main_font.clone(), main_render)
                 });
                 let main_pos = if has_detail {
@@ -269,7 +269,7 @@ impl Overlay {
                 if has_detail {
                     let detail_color = Color32::from_rgb(151, 160, 177);
                     let detail_render = fade(detail_color, animate);
-                    let detail_galley = ctx.fonts(|fonts| {
+                    let detail_galley = ui.ctx().fonts_mut(|fonts| {
                         fonts.layout_no_wrap(
                             self.detail.clone(),
                             FontId::proportional(10.5),

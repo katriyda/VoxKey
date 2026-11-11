@@ -419,11 +419,11 @@ impl VoxKeyApp {
             .with_decorations(true);
 
         let mut close_requested = false;
-        let action = ctx.show_viewport_immediate(viewport_id, builder, |ctx, _class| {
-            if ctx.input(|input| input.viewport().close_requested()) {
+        let action = ctx.show_viewport_immediate(viewport_id, builder, |ui, _class| {
+            if ui.ctx().input(|input| input.viewport().close_requested()) {
                 close_requested = true;
             }
-            settings::draw(ctx, &mut self.settings)
+            settings::draw(ui, &mut self.settings)
         });
 
         if self.focus_settings {
@@ -445,15 +445,15 @@ impl VoxKeyApp {
         }
 
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        if let Ok(handle) = frame.window_handle() {
-            if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-                let raw = win32.hwnd.get();
-                let hwnd = windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void);
-                platform::configure_overlay_window(hwnd);
-                self.overlay_hwnd_raw = Some(raw);
-                self.overlay_configured = true;
-                return;
-            }
+        if let Ok(handle) = frame.window_handle()
+            && let RawWindowHandle::Win32(win32) = handle.as_raw()
+        {
+            let raw = win32.hwnd.get();
+            let hwnd = windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void);
+            platform::configure_overlay_window(hwnd);
+            self.overlay_hwnd_raw = Some(raw);
+            self.overlay_configured = true;
+            return;
         }
 
         self.configure_attempts += 1;
@@ -513,13 +513,14 @@ impl VoxKeyApp {
 }
 
 impl eframe::App for VoxKeyApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().clamp(0.0, 0.05);
         self.last_frame = now;
 
-        self.configure_overlay(ctx, frame);
-        self.process_events(ctx);
+        self.configure_overlay(&ctx, frame);
+        self.process_events(&ctx);
         if self.exiting {
             return;
         }
@@ -539,28 +540,27 @@ impl eframe::App for VoxKeyApp {
             if let Some(raw) = self.overlay_hwnd_raw {
                 let hwnd = windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void);
                 platform::configure_overlay_window(hwnd);
-                if platform::foreground_window() == Some(hwnd) {
-                    if let Some(previous) = self.previous_foreground {
-                        if previous != raw {
-                            platform::set_foreground_window(windows::Win32::Foundation::HWND(
-                                previous as *mut std::ffi::c_void,
-                            ));
-                        }
-                    }
+                if platform::foreground_window() == Some(hwnd)
+                    && let Some(previous) = self.previous_foreground
+                    && previous != raw
+                {
+                    platform::set_foreground_window(windows::Win32::Foundation::HWND(
+                        previous as *mut std::ffi::c_void,
+                    ));
                 }
             }
             self.overlay_style_refresh = self.overlay_style_refresh.saturating_sub(1);
         }
 
-        self.update_overlay_window(ctx);
+        self.update_overlay_window(&ctx);
 
         if self.overlay.is_visible() {
-            self.overlay.render(ctx);
+            self.overlay.render(ui);
             ctx.request_repaint_after(Duration::from_millis(16));
         }
 
         if self.show_settings {
-            let action = self.draw_settings(ctx);
+            let action = self.draw_settings(&ctx);
             if action.test {
                 self.start_llm_test();
             }
@@ -606,20 +606,19 @@ fn install_fonts_and_style(ctx: &egui::Context) {
     }
     ctx.set_fonts(fonts);
 
-    let mut style = (*ctx.style()).clone();
-    style.visuals = egui::Visuals::dark();
-    style.visuals.panel_fill = Color32::from_rgb(18, 20, 27);
-    style.visuals.window_fill = Color32::from_rgb(18, 20, 27);
-    style.visuals.extreme_bg_color = Color32::from_rgb(12, 14, 19);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 38, 49);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(44, 49, 63);
-    style.visuals.widgets.active.bg_fill = Color32::from_rgb(54, 60, 77);
-    style.visuals.selection.bg_fill = Color32::from_rgb(53, 101, 79);
-    style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-    style.spacing.button_padding = Vec2::new(10.0, 5.0);
-    ctx.set_style(style);
-
-    ctx.style_mut(|style| {
+    // egui 0.37 stores one `Style` per theme, so the palette and text styles
+    // are applied through `all_styles_mut` to cover every theme.
+    ctx.all_styles_mut(|style| {
+        style.visuals = egui::Visuals::dark();
+        style.visuals.panel_fill = Color32::from_rgb(18, 20, 27);
+        style.visuals.window_fill = Color32::from_rgb(18, 20, 27);
+        style.visuals.extreme_bg_color = Color32::from_rgb(12, 14, 19);
+        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 38, 49);
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(44, 49, 63);
+        style.visuals.widgets.active.bg_fill = Color32::from_rgb(54, 60, 77);
+        style.visuals.selection.bg_fill = Color32::from_rgb(53, 101, 79);
+        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+        style.spacing.button_padding = Vec2::new(10.0, 5.0);
         style
             .text_styles
             .insert(egui::TextStyle::Body, FontId::proportional(13.0));

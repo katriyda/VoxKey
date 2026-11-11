@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::hotkey::{parse_hotkey, DEFAULT_HOTKEY};
+use crate::hotkey::{DEFAULT_HOTKEY, parse_hotkey};
 use crate::secrets;
 
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
-pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
+pub const DEFAULT_MODEL: &str = "gpt-5.4-mini";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
@@ -161,7 +161,7 @@ impl Config {
             llm_enabled: disk.llm_enabled,
             api_base_url: non_empty_or(disk.api_base_url, DEFAULT_API_BASE),
             api_key,
-            model: non_empty_or(disk.model, DEFAULT_MODEL),
+            model: migrate_model(disk.model),
         }
     }
 
@@ -210,6 +210,19 @@ fn non_empty_or(value: String, fallback: &str) -> String {
     }
 }
 
+/// Model ids that shipped as a default in an earlier release and have since
+/// been retired by the provider. Saved configs are moved to the current
+/// default instead of silently calling a deprecated endpoint.
+const LEGACY_MODELS: [&str; 1] = ["gpt-4o-mini"];
+
+fn migrate_model(model: String) -> String {
+    if LEGACY_MODELS.contains(&model.trim()) {
+        DEFAULT_MODEL.to_string()
+    } else {
+        non_empty_or(model, DEFAULT_MODEL)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +241,16 @@ mod tests {
         assert_eq!(parse_hotkey(&cfg.hotkey).unwrap().label, "右 Ctrl");
         assert!(!cfg.llm_enabled);
         assert!(cfg.api_key.is_empty());
+        assert_eq!(cfg.model, DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn legacy_model_ids_are_migrated() {
+        assert_eq!(migrate_model("gpt-4o-mini".to_string()), DEFAULT_MODEL);
+        assert_eq!(migrate_model("  ".to_string()), DEFAULT_MODEL);
+        assert_eq!(
+            migrate_model("qwen3-asr".to_string()),
+            "qwen3-asr".to_string()
+        );
     }
 }
