@@ -55,7 +55,7 @@ VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住�
   "hotkey": "right_ctrl",
   "llm_enabled": false,
   "api_base_url": "https://api.openai.com/v1",
-  "model": "gpt-4o-mini",
+  "model": "gpt-5.4-mini",
   "api_key_enc": "<DPAPI 密文 hex；无密钥时省略此字段>"
 }
 ```
@@ -63,6 +63,8 @@ VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住�
 - Base URL 可以是 `https://api.openai.com/v1`、`http://localhost:11434`，也可以直接填完整的 `.../chat/completions`。
 - 若端点不需要鉴权，API Key 留空即可；VoxKey 不会发送空的 `Authorization` 头。
 - API Key 的“彻底清空”：设置页点击“清空”并 Save，配置文件中的 `api_key_enc` 会被移除，绝不会回退到明文。
+- 默认模型是 `gpt-5.4-mini`。`gpt-4o-mini` 已被 OpenAI 标记为 Deprecated，旧配置文件里的该模型会在启动时自动迁移到新默认值。
+- 请求体默认使用 `max_tokens` + `temperature: 0`（兼容多数 OpenAI 兼容服务端）；若端点返回 400 并提示不支持（例如 GPT-5.x 系列要求 `max_completion_tokens`），VoxKey 会自动改用 `max_completion_tokens`、必要时再去掉 `temperature` 重试一次。
 
 ## LLM 纠错约束
 
@@ -121,12 +123,12 @@ target/release/VoxKey.exe
 
 ## 技术栈
 
-- Rust 2021
+- Rust 2024（MSRV 1.95，CI 与 `mise.toml` 固定 1.97.0）
 - `windows` 0.62（Win32 钩子、托盘、剪贴板、SendInput、DPAPI）
-- `eframe` / `egui` 0.32（悬浮窗与设置）
-- `cpal` 0.16（麦克风）
+- `eframe` / `egui` 0.37（悬浮窗与设置）
+- `cpal` 0.18（麦克风）
 - `sherpa-onnx` 2.0（本地 ASR）
-- `tokio` + `reqwest`（模型下载与 LLM 请求）
+- `tokio` + `reqwest` 0.13（SChannel/native-tls，模型下载与 LLM 请求）
 - `serde` / `serde_json`（配置与 API JSON）
 
 ## 架构

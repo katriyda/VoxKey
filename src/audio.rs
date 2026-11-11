@@ -1,7 +1,7 @@
 //! Microphone capture and linear resampling used by the ASR worker.
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -19,14 +19,21 @@ impl Recorder {
         let device = host
             .default_input_device()
             .ok_or_else(|| "没有可用的麦克风输入设备".to_string())?;
-        let device_name = device.name().unwrap_or_else(|_| "默认麦克风".to_string());
+        let device_name = {
+            let name = device.to_string();
+            if name.trim().is_empty() {
+                "默认麦克风".to_string()
+            } else {
+                name
+            }
+        };
         let supported = device
             .default_input_config()
             .map_err(|e| format!("无法读取麦克风配置: {e}"))?;
         let sample_format = supported.sample_format();
         let config = supported.config();
         let channels = config.channels as usize;
-        let sample_rate = config.sample_rate.0;
+        let sample_rate = config.sample_rate;
         if channels == 0 || sample_rate == 0 {
             return Err("麦克风返回了无效的音频参数".to_string());
         }
@@ -41,7 +48,7 @@ impl Recorder {
                 let level = Arc::clone(&level);
                 let err_fn = make_error_callback(Arc::clone(&error), device_name.clone());
                 device.build_input_stream(
-                    &config,
+                    config,
                     move |data: &[f32], _| push_mono(data, channels, &buffer, &level, |s| s),
                     err_fn,
                     None,
@@ -52,7 +59,7 @@ impl Recorder {
                 let level = Arc::clone(&level);
                 let err_fn = make_error_callback(Arc::clone(&error), device_name.clone());
                 device.build_input_stream(
-                    &config,
+                    config,
                     move |data: &[i16], _| {
                         push_mono(data, channels, &buffer, &level, |s| s as f32 / 32768.0)
                     },
@@ -65,7 +72,7 @@ impl Recorder {
                 let level = Arc::clone(&level);
                 let err_fn = make_error_callback(Arc::clone(&error), device_name.clone());
                 device.build_input_stream(
-                    &config,
+                    config,
                     move |data: &[u16], _| {
                         push_mono(data, channels, &buffer, &level, |s| {
                             (s as f32 - 32768.0) / 32768.0
@@ -80,7 +87,7 @@ impl Recorder {
                 let level = Arc::clone(&level);
                 let err_fn = make_error_callback(Arc::clone(&error), device_name.clone());
                 device.build_input_stream(
-                    &config,
+                    config,
                     move |data: &[i32], _| {
                         push_mono(data, channels, &buffer, &level, |s| {
                             s as f32 / 2_147_483_648.0
@@ -95,7 +102,7 @@ impl Recorder {
                 let level = Arc::clone(&level);
                 let err_fn = make_error_callback(Arc::clone(&error), device_name.clone());
                 device.build_input_stream(
-                    &config,
+                    config,
                     move |data: &[u8], _| {
                         push_mono(data, channels, &buffer, &level, |s| {
                             (s as f32 - 128.0) / 128.0
@@ -158,13 +165,13 @@ impl Recorder {
 fn make_error_callback(
     error: Arc<Mutex<Option<String>>>,
     device_name: String,
-) -> impl FnMut(cpal::StreamError) + Send + 'static {
+) -> impl FnMut(cpal::Error) + Send + 'static {
     move |err| {
         eprintln!("VoxKey: audio stream error ({device_name}): {err}");
-        if let Ok(mut guard) = error.lock() {
-            if guard.is_none() {
-                *guard = Some(err.to_string());
-            }
+        if let Ok(mut guard) = error.lock()
+            && guard.is_none()
+        {
+            *guard = Some(err.to_string());
         }
     }
 }

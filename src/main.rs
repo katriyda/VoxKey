@@ -17,8 +17,8 @@ mod settings;
 mod zh;
 
 use eframe::egui;
+use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 use windows::core::PCWSTR;
-use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
 fn main() {
     if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
@@ -46,7 +46,6 @@ fn main() {
             .with_drag_and_drop(false),
         renderer: eframe::Renderer::Glow,
         multisampling: 0,
-        vsync: true,
         centered: false,
         persist_window: false,
         ..Default::default()

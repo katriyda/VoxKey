@@ -1,8 +1,8 @@
 [package]
 name = "voxkey"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.85"
+edition = "2024"
+rust-version = "1.95"
 description = "Hold-to-talk, local-first voice input for Windows"
 license = "MIT"
 repository = "https://github.com/katriyda/VoxKey"
@@ -12,11 +12,11 @@ name = "VoxKey"
 path = "src/main.rs"
 
 [dependencies]
-cpal = "0.16"
-eframe = { version = "0.32.3", default-features = false, features = ["default_fonts", "glow"] }
-egui = "0.32.3"
+cpal = "0.18"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow"] }
+egui = "0.37"
 raw-window-handle = "0.6"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sherpa-onnx = "2.0.1"

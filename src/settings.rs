@@ -2,7 +2,7 @@
 
 use egui::{Color32, RichText};
 
-use crate::config::{Config, Language, DEFAULT_API_BASE, DEFAULT_MODEL};
+use crate::config::{Config, DEFAULT_API_BASE, DEFAULT_MODEL, Language};
 use crate::hotkey::parse_hotkey;
 
 #[derive(Default)]
@@ -35,7 +35,7 @@ impl SettingsState {
     }
 }
 
-pub fn draw(ctx: &egui::Context, state: &mut SettingsState) -> SettingsAction {
+pub fn draw(ui: &mut egui::Ui, state: &mut SettingsState) -> SettingsAction {
     let mut action = SettingsAction::default();
     let theme_bg = Color32::from_rgb(18, 20, 27);
     let muted = Color32::from_rgb(151, 159, 176);
@@ -46,7 +46,7 @@ pub fn draw(ctx: &egui::Context, state: &mut SettingsState) -> SettingsAction {
                 .fill(theme_bg)
                 .inner_margin(egui::Margin::same(20)),
         )
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {

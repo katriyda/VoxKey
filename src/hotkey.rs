@@ -144,12 +144,11 @@ fn trigger_code(name: &str) -> Option<(u32, bool)> {
         "backtick" | "grave" => VK_OEM_3,
         "fn" | "f13" => VK_F13,
         _ => {
-            if let Some(number) = name.strip_prefix('f') {
-                if let Ok(n) = number.parse::<u32>() {
-                    if (1..=12).contains(&n) {
-                        return Some((VK_F1 + n - 1, false));
-                    }
-                }
+            if let Some(number) = name.strip_prefix('f')
+                && let Ok(n) = number.parse::<u32>()
+                && (1..=12).contains(&n)
+            {
+                return Some((VK_F1 + n - 1, false));
             }
             if name.len() == 1 {
                 let ch = name.chars().next().unwrap();

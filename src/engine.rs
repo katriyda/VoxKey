@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineSenseVoiceModelConfig};
 
-use crate::audio::{resample_linear, Recorder};
+use crate::audio::{Recorder, resample_linear};
 use crate::clipboard;
 use crate::config::Language;
 use crate::events::{EngineEvent, UiEvent};
@@ -209,10 +209,10 @@ fn run_engine(
         }
 
         if shutdown_requested {
-            if let Some(mut current) = session.take() {
-                if let Some(recorder) = current.recorder.take() {
-                    let _ = recorder.stop();
-                }
+            if let Some(mut current) = session.take()
+                && let Some(recorder) = current.recorder.take()
+            {
+                let _ = recorder.stop();
             }
             break;
         }
@@ -282,10 +282,10 @@ fn run_engine(
         std::thread::sleep(Duration::from_millis(25));
     }
 
-    if let Some(mut current) = session {
-        if let Some(recorder) = current.recorder.take() {
-            let _ = recorder.stop();
-        }
+    if let Some(mut current) = session
+        && let Some(recorder) = current.recorder.take()
+    {
+        let _ = recorder.stop();
     }
 }
 

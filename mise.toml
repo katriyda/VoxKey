@@ -1,0 +1,4 @@
+# Toolchain pin for VoxKey. Managed with mise (https://mise.jdx.dev).
+# Run `mise install` after cloning to get the same Rust the CI uses.
+[tools]
+rust = "1.97.0"
