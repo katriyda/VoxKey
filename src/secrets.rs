@@ -97,7 +97,7 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
         return Err("保存的密钥数据长度非法".to_string());
     }
     let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for chunk in hex.as_bytes().chunks_exact(2) {
+    for chunk in hex.as_bytes().as_chunks::<2>().0 {
         let hi = hex_nibble(chunk[0])?;
         let lo = hex_nibble(chunk[1])?;
         bytes.push((hi << 4) | lo);

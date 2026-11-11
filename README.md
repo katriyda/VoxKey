@@ -123,7 +123,7 @@ target/release/VoxKey.exe
 
 ## 技术栈
 
-- Rust 2024（MSRV 1.95，CI 与 `mise.toml` 固定 1.97.0）
+- Rust 2024（MSRV 1.95，CI 与 `mise.toml` 固定 1.99.1）
 - `windows` 0.62（Win32 钩子、托盘、剪贴板、SendInput、DPAPI）
 - `eframe` / `egui` 0.37（悬浮窗与设置）
 - `cpal` 0.18（麦克风）
