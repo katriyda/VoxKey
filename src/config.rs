@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::hotkey::{DEFAULT_HOTKEY, parse_hotkey};
+use crate::i18n::{UiLanguage, ts};
 use crate::secrets;
 
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
@@ -44,11 +45,11 @@ impl Language {
 
     pub fn label(self) -> &'static str {
         match self {
-            Language::ZhCn => "简体中文",
+            Language::ZhCn => ts!("简体中文", "Chinese (Simplified)"),
             Language::En => "English",
-            Language::ZhTw => "繁體中文",
-            Language::Ja => "日本語",
-            Language::Ko => "한국어",
+            Language::ZhTw => ts!("繁體中文", "Chinese (Traditional)"),
+            Language::Ja => ts!("日本語", "Japanese"),
+            Language::Ko => ts!("한국어", "Korean"),
         }
     }
 }
@@ -56,6 +57,7 @@ impl Language {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub language: Language,
+    pub ui_language: UiLanguage,
     pub hotkey: String,
     pub llm_enabled: bool,
     pub api_base_url: String,
@@ -67,6 +69,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: Language::ZhCn,
+            ui_language: UiLanguage::Auto,
             hotkey: DEFAULT_HOTKEY.to_string(),
             llm_enabled: false,
             api_base_url: DEFAULT_API_BASE.to_string(),
@@ -80,6 +83,7 @@ impl Default for Config {
 #[serde(default)]
 struct DiskConfig {
     language: Language,
+    ui_language: UiLanguage,
     hotkey: String,
     llm_enabled: bool,
     api_base_url: String,
@@ -93,6 +97,7 @@ impl Default for DiskConfig {
     fn default() -> Self {
         Self {
             language: Language::ZhCn,
+            ui_language: UiLanguage::Auto,
             hotkey: DEFAULT_HOTKEY.to_string(),
             llm_enabled: false,
             api_base_url: DEFAULT_API_BASE.to_string(),
@@ -157,6 +162,7 @@ impl Config {
 
         Self {
             language: disk.language,
+            ui_language: disk.ui_language,
             hotkey,
             llm_enabled: disk.llm_enabled,
             api_base_url: non_empty_or(disk.api_base_url, DEFAULT_API_BASE),
@@ -177,6 +183,7 @@ impl Config {
 
         let disk = DiskConfig {
             language: self.language,
+            ui_language: self.ui_language,
             hotkey: self.hotkey.clone(),
             llm_enabled: self.llm_enabled,
             api_base_url: self.api_base_url.trim().to_string(),

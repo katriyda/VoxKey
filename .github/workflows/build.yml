@@ -22,18 +22,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Verify tag matches Cargo.toml version
-        # The in-app updater compares the release tag against the version
-        # compiled into the binary (`CARGO_PKG_VERSION`). A mismatch makes
-        # every build report itself as older than its own release.
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Read package version
         shell: pwsh
         run: |
           $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
           if (-not $match) { throw "Cannot read package version from Cargo.toml" }
           $version = $match.Matches[0].Groups[1].Value
-          if ("v$version" -ne $env:GITHUB_REF_NAME) {
-            throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+          "VOXKEY_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            if ("v$version" -ne $env:GITHUB_REF_NAME) {
+              throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+            }
           }
 
       - name: Install Rust
@@ -52,45 +51,78 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Test
-        run: cargo test --release --locked
+        run: cargo test --release --locked --workspace
 
-      - name: Build release executable
-        run: cargo build --release --locked
+      - name: Build speech engine worker
+        # Built first: the UI embeds the worker's SHA-256 so it can verify the
+        # `VoxKey-asr.exe` it downloads on first run.
+        run: cargo build --release --locked -p voxkey-asr
 
-      - name: Verify standalone executable
+      - name: Pin the worker checksum into the UI build
         shell: pwsh
         run: |
-          $dumpbin = Get-ChildItem "$env:ProgramFiles\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $worker = "target\\release\\VoxKey-asr.exe"
+          if (-not (Test-Path $worker)) { throw "worker binary is missing" }
+          $hash = (Get-FileHash $worker -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item $worker).Length
+          Write-Output "worker: $size bytes, sha256 $hash"
+          if ($size -lt 4_000_000) { throw "worker binary is implausibly small ($size bytes)" }
+          "VOXKEY_ASR_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build release executable
+        run: cargo build --release --locked -p voxkey
+
+      - name: Verify standalone executables
+        shell: pwsh
+        run: |
+          $dumpbin = Get-ChildItem "$env:ProgramFiles\\Microsoft Visual Studio\\2022\\*\\VC\\Tools\\MSVC\\*\\bin\\Hostx64\\x64\\dumpbin.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $dumpbin) {
             throw "dumpbin.exe not found"
           }
-          $out = & $dumpbin.FullName /dependents "target\release\VoxKey.exe"
-          $out | Write-Output
-          if ($out -match "onnxruntime|sherpa|VCRUNTIME|MSVCP") {
-            throw "VoxKey.exe still depends on a non-system runtime DLL"
+          foreach ($name in @("VoxKey.exe", "VoxKey-asr.exe")) {
+            $path = "target\\release\\$name"
+            $out = & $dumpbin.FullName /dependents $path
+            $out | Write-Output
+            if ($out -match "onnxruntime|sherpa|VCRUNTIME|MSVCP") {
+              throw "$name still depends on a non-system runtime DLL"
+            }
           }
 
-      - name: Smoke test version flag
-        # The in-app updater validates a downloaded build by running it with
+          # The UI must stay small: the engine lives in the worker now. This
+          # catches an accidental re-introduction of sherpa-onnx into VoxKey.exe
+          # (which would push it back over 20 MB) before the release is cut.
+          $uiSize = (Get-Item "target\\release\\VoxKey.exe").Length
+          Write-Output "VoxKey.exe size: $uiSize bytes"
+          if ($uiSize -gt 16_000_000) {
+            throw "VoxKey.exe is $uiSize bytes; the UI must stay under 16 MB"
+          }
+          $workerSize = (Get-Item "target\\release\\VoxKey-asr.exe").Length
+          Write-Output "VoxKey-asr.exe size: $workerSize bytes"
+
+      - name: Smoke test version flags
+        # The updater validates a downloaded build by running it with
         # `--version` and reading stdout, so this reproduces that exact path.
         shell: pwsh
         run: |
-          $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
-          $version = $match.Matches[0].Groups[1].Value
-          $psi = New-Object System.Diagnostics.ProcessStartInfo
-          $psi.FileName = (Resolve-Path "target\release\VoxKey.exe").Path
-          $psi.Arguments = "--version"
-          $psi.RedirectStandardOutput = $true
-          $psi.UseShellExecute = $false
-          $process = [System.Diagnostics.Process]::Start($psi)
-          $stdout = $process.StandardOutput.ReadToEnd()
-          $process.WaitForExit()
-          Write-Output "stdout: $stdout"
-          if ($process.ExitCode -ne 0) {
-            throw "VoxKey.exe --version exited with $($process.ExitCode)"
-          }
-          if ($stdout.Trim() -ne "VoxKey $version") {
-            throw "VoxKey.exe --version printed '$($stdout.Trim())', expected 'VoxKey $version'"
+          $version = $env:VOXKEY_VERSION
+          foreach ($pair in @(@("VoxKey.exe", "VoxKey"), @("VoxKey-asr.exe", "VoxKey-asr"))) {
+            $file = $pair[0]
+            $label = $pair[1]
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = (Resolve-Path "target\\release\\$file").Path
+            $psi.Arguments = "--version"
+            $psi.RedirectStandardOutput = $true
+            $psi.UseShellExecute = $false
+            $process = [System.Diagnostics.Process]::Start($psi)
+            $stdout = $process.StandardOutput.ReadToEnd()
+            $process.WaitForExit()
+            Write-Output "${label}: $stdout"
+            if ($process.ExitCode -ne 0) {
+              throw "$file --version exited with $($process.ExitCode)"
+            }
+            if ($stdout.Trim() -ne "$label $version") {
+              throw "$file --version printed '$($stdout.Trim())', expected '$label $version'"
+            }
           }
 
       - name: Verify embedded version resource
@@ -100,9 +132,8 @@ jobs:
         # ML classifiers distrust. Assert the metadata is really in the PE.
         shell: pwsh
         run: |
-          $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
-          $version = $match.Matches[0].Groups[1].Value
-          $info = (Get-Item "target\release\VoxKey.exe").VersionInfo
+          $version = $env:VOXKEY_VERSION
+          $info = (Get-Item "target\\release\\VoxKey.exe").VersionInfo
           Write-Output "CompanyName=$($info.CompanyName) FileDescription=$($info.FileDescription) ProductVersion=$($info.ProductVersion)"
           if ($info.CompanyName -ne "VoxKey") {
             throw "VERSIONINFO resource missing: CompanyName='$($info.CompanyName)'"
@@ -111,11 +142,13 @@ jobs:
             throw "VERSIONINFO ProductVersion '$($info.ProductVersion)' does not match Cargo.toml '$version'"
           }
 
-      - name: Upload single-file artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: VoxKey-windows-x64
-          path: target/release/VoxKey.exe
+          path: |
+            target/release/VoxKey.exe
+            target/release/VoxKey-asr.exe
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -127,7 +160,7 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag "target/release/VoxKey.exe" --clobber
+            gh release upload $tag "target/release/VoxKey.exe" "target/release/VoxKey-asr.exe" --clobber
           } else {
-            gh release create $tag "target/release/VoxKey.exe" --title "VoxKey $tag" --generate-notes
+            gh release create $tag "target/release/VoxKey.exe" "target/release/VoxKey-asr.exe" --title "VoxKey $tag" --generate-notes
           }

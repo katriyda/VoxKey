@@ -13,7 +13,7 @@
 | `cargo build --release --locked` | ✅ |
 | `dumpbin /dependents` 检查 | ✅ 没有 onnxruntime / sherpa / VCRUNTIME / MSVCP 依赖 |
 | `VoxKey.exe --version` 冒烟测试 | ✅ |
-| 单文件 artifact 上传 | ✅ `VoxKey.exe`，约 40 MB |
+| 单文件 artifact 上传 | ✅ `VoxKey.exe`，约 40 MB（2026-11-11 体积优化后改为两个资产，见文末） |
 
 最终 exe SHA-256（Actions run 42817193269，源码 commit `fdbb448`）：
 
@@ -51,3 +51,28 @@ a8d1e2bc9b6d335c783b5398b523465c11f481905abe93ec037b0c4f6670f591
 根因：`main.rs` 里的 `with_mouse_passthrough(true)` 会让 winit 给窗口加上 `WS_EX_LAYERED`（`window_state.rs` 中 `IGNORE_CURSOR_EVENT` 分支），却从不设置 layered 属性。一个没有属性的 layered 窗口不会被合成，窗口存在、内容在渲染、`IsWindowVisible` 为真，但屏幕上什么都看不到。
 
 修复：去掉 `with_mouse_passthrough`，改为在窗口过程里对 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，既保留真实的逐像素透明（DWM blur-behind），又保持鼠标穿透。
+
+## 体积优化：UI 与引擎拆分（2026-11-11）
+
+目标是“本体 exe 要小，模型/引擎可以下载”，同时不降低识别质量（仍是 SenseVoice int8，同一套解码代码）。改动与本地实测：
+
+| 改动 | 效果 |
+| --- | --- |
+| 移除内嵌 `NotoSansCJKsc-Regular.otf`，改为运行时读取 `C:\Windows\Fonts`（Segoe UI + 微软雅黑/宋体），无中文字体回退英文 | −16.4 MB |
+| 关闭 `eframe` 的 `default_fonts` | −1.5 MB |
+| SenseVoice 推理移入独立进程 `VoxKey-asr.exe`（sherpa-onnx + 静态 onnxruntime） | UI −19.3 MB |
+| `opt-level = "z"` + `lto = "fat"` | 约 −1 MB |
+
+本地 `cargo build --release`（仅用于体积测量，发布产物仍由 CI 生成）：
+
+```text
+target/release/VoxKey.exe       5,304,832 字节   （41,738,240 → 5.3 MB，−87%）
+target/release/VoxKey-asr.exe  19,258,880 字节   （首次运行自动下载）
+```
+
+- `VoxKey.exe` 内已无 `onnxruntime` 字符串（`grep -a -c onnxruntime` = 0）；`sherpa` 仅剩模型仓库常量。
+- worker 协议实测（真实 int8 模型）：`load` → `{"ok":true}`；`transcribe` 3200 个静音采样 → `{"ok":true,"text":"。"}`（UI 侧的“无有效文字”守卫会拒绝该幻觉结果）；`shutdown` → `{"ok":true}`。
+- `cargo test --release --locked --workspace`：UI 42 个 + worker 3 个测试全部通过。
+- 首次运行的磁盘占用：UI 5.3 MB + 引擎 19.3 MB + 模型 229.5 MB ≈ 254 MB（原单文件方案为 471 MB）。
+
+**未实测**：真机 GUI 端到端（沙箱内无法显示悬浮窗/托盘）、CI 产物、无中文字体的英文回退界面、Windows 10 干净机首次运行。CI 已加入 UI 体积上限断言（≤16 MB）与两个 exe 的 DLL 依赖检查。

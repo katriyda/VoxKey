@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::i18n::{trf, ts};
 
 #[derive(Clone, Debug)]
 pub struct RefineConfig {
@@ -218,7 +219,7 @@ async fn chat_completion(
         let body = response
             .text()
             .await
-            .map_err(|e| format!("读取响应失败: {e}"))?;
+            .map_err(|e| trf!("读取响应失败: {e}", "Failed to read the response: {e}"))?;
 
         if status.is_success() {
             return Ok(body);
@@ -239,10 +240,10 @@ async fn chat_completion(
 
 pub async fn refine_async(config: &RefineConfig, transcript: &str) -> Result<String, String> {
     if config.base_url.trim().is_empty() {
-        return Err("API Base URL 为空".to_string());
+        return Err(ts!("API Base URL 为空", "API base URL is empty").to_string());
     }
     if config.model.trim().is_empty() {
-        return Err("Model 为空".to_string());
+        return Err(ts!("Model 为空", "Model is empty").to_string());
     }
 
     let user_prompt = format!(
@@ -263,7 +264,7 @@ pub async fn refine_async(config: &RefineConfig, transcript: &str) -> Result<Str
         ],
         token_limit,
         Duration::from_secs(45),
-        "请求失败",
+        ts!("请求失败", "Request failed"),
     )
     .await?;
 
@@ -273,10 +274,10 @@ pub async fn refine_async(config: &RefineConfig, transcript: &str) -> Result<Str
 
 pub async fn test_connection(config: &RefineConfig) -> Result<String, String> {
     if config.base_url.trim().is_empty() {
-        return Err("API Base URL 为空".to_string());
+        return Err(ts!("API Base URL 为空", "API base URL is empty").to_string());
     }
     if config.model.trim().is_empty() {
-        return Err("Model 为空".to_string());
+        return Err(ts!("Model 为空", "Model is empty").to_string());
     }
 
     let body = chat_completion(
@@ -293,7 +294,7 @@ pub async fn test_connection(config: &RefineConfig) -> Result<String, String> {
         ],
         8,
         Duration::from_secs(20),
-        "连接失败",
+        ts!("连接失败", "Connection failed"),
     )
     .await?;
 
@@ -301,7 +302,7 @@ pub async fn test_connection(config: &RefineConfig) -> Result<String, String> {
     let compact: String = content.split_whitespace().collect::<Vec<_>>().join(" ");
     let truncated = truncate_chars(&compact, 100);
     if truncated.is_empty() {
-        Err("接口返回了空内容".to_string())
+        Err(ts!("接口返回了空内容", "The endpoint returned empty content").to_string())
     } else {
         Ok(truncated)
     }
@@ -309,8 +310,9 @@ pub async fn test_connection(config: &RefineConfig) -> Result<String, String> {
 
 fn parse_chat_content(body: &str) -> Result<String, String> {
     let parsed: ChatResponse = serde_json::from_str(body).map_err(|_| {
-        format!(
+        trf!(
             "响应不是有效的 Chat Completions JSON: {}",
+            "Response is not valid Chat Completions JSON: {}",
             truncate_chars(body, 180)
         )
     })?;
@@ -318,7 +320,13 @@ fn parse_chat_content(body: &str) -> Result<String, String> {
         .choices
         .into_iter()
         .find_map(|choice| choice.message.content)
-        .ok_or_else(|| "响应中没有 message.content".to_string())
+        .ok_or_else(|| {
+            ts!(
+                "响应中没有 message.content",
+                "Response contains no message.content"
+            )
+            .to_string()
+        })
 }
 
 fn extract_api_error(status: u16, body: &str) -> String {
@@ -327,9 +335,14 @@ fn extract_api_error(status: u16, body: &str) -> String {
         .and_then(|envelope| envelope.error)
         .and_then(|error| error.message);
     match message {
-        Some(message) => format!("API 错误 HTTP {status}: {}", truncate_chars(&message, 220)),
-        None => format!(
+        Some(message) => trf!(
             "API 错误 HTTP {status}: {}",
+            "API error HTTP {status}: {}",
+            truncate_chars(&message, 220)
+        ),
+        None => trf!(
+            "API 错误 HTTP {status}: {}",
+            "API error HTTP {status}: {}",
             truncate_chars(body.trim(), 220)
         ),
     }
@@ -337,11 +350,15 @@ fn extract_api_error(status: u16, body: &str) -> String {
 
 fn friendly_reqwest_error(error: &reqwest::Error) -> String {
     if error.is_timeout() {
-        "请求超时".to_string()
+        ts!("请求超时", "Request timed out").to_string()
     } else if error.is_connect() {
-        "无法连接服务器（请检查 Base URL 与网络）".to_string()
+        ts!(
+            "无法连接服务器（请检查 Base URL 与网络）",
+            "Cannot reach the server (check the Base URL and your network)"
+        )
+        .to_string()
     } else if error.is_decode() {
-        "响应解析失败".to_string()
+        ts!("响应解析失败", "Failed to parse the response").to_string()
     } else {
         truncate_chars(&error.to_string(), 180)
     }

@@ -25,8 +25,12 @@ fn write(level: &str, message: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
-        return;
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("[logging] cannot open {}: {err}", path.display());
+            return;
+        }
     };
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)

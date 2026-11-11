@@ -3,7 +3,9 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Pos2, Vec2};
+use egui::{Pos2, Vec2};
+
+use crate::i18n::{trf, ts};
 
 use crate::config::Config;
 use crate::engine::{self, EngineHandle};
@@ -18,7 +20,9 @@ use crate::settings::{self, SettingsAction, SettingsState};
 use crate::update::{self, UpdateUiState};
 
 const SETTINGS_VIEWPORT_NAME: &str = "voxkey-settings";
-const TRAY_ICON_BYTES: &[u8] = include_bytes!("../assets/voxkey.ico");
+fn settings_window_title() -> &'static str {
+    ts!("VoxKey 设置", "VoxKey Settings")
+}
 
 pub struct VoxKeyApp {
     ctx: egui::Context,
@@ -40,6 +44,7 @@ pub struct VoxKeyApp {
     configure_attempts: u32,
     show_settings: bool,
     focus_settings: bool,
+    settings_icon_applied: bool,
     settings: SettingsState,
     update: UpdateUiState,
     importing_model: bool,
@@ -54,7 +59,8 @@ impl VoxKeyApp {
         cc: &eframe::CreationContext<'_>,
         config: Config,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        install_fonts_and_style(&cc.egui_ctx);
+        let cjk_available = crate::fonts::install(&cc.egui_ctx);
+        crate::i18n::apply(config.ui_language, cjk_available);
 
         let (ui_tx, ui_rx) = std::sync::mpsc::channel();
         let engine = engine::spawn(config.language, ui_tx.clone(), cc.egui_ctx.clone())
@@ -72,7 +78,7 @@ impl VoxKeyApp {
             ui_tx.clone(),
             hotkey,
             tray_state,
-            TRAY_ICON_BYTES,
+            platform::APP_ICON_BYTES,
         );
 
         Ok(Self {
@@ -95,6 +101,7 @@ impl VoxKeyApp {
             configure_attempts: 0,
             show_settings: false,
             focus_settings: false,
+            settings_icon_applied: false,
             settings: SettingsState::from_config(&Config::default()),
             update: UpdateUiState::default(),
             importing_model: false,
@@ -115,8 +122,8 @@ impl VoxKeyApp {
                 UiEvent::LlmTestResult(result) => {
                     self.settings.testing = false;
                     self.settings.message = Some(match result {
-                        Ok(reply) => (true, format!("连接成功：{reply}")),
-                        Err(err) => (false, format!("测试失败：{err}")),
+                        Ok(reply) => (true, trf!("连接成功：{reply}", "Connected: {reply}")),
+                        Err(err) => (false, trf!("测试失败：{err}", "Test failed: {err}")),
                     });
                 }
                 UiEvent::Update(event) => self.on_update_event(ctx, event),
@@ -125,7 +132,7 @@ impl VoxKeyApp {
                     crate::logging::error(&err);
                     self.overlay.present(
                         OverlayKind::Error,
-                        "VoxKey 启动异常",
+                        ts!("VoxKey 启动异常", "VoxKey startup error"),
                         err,
                         Some(Duration::from_secs(7)),
                     );
@@ -140,12 +147,18 @@ impl VoxKeyApp {
         }
         if !self.engine_ready {
             if self.overlay.kind == OverlayKind::Download {
-                self.overlay.set_detail("模型尚未就绪，请稍候…");
+                self.overlay.set_detail(ts!(
+                    "模型尚未就绪，请稍候…",
+                    "The model is not ready yet, please wait…",
+                ));
             } else {
                 self.overlay.present(
                     OverlayKind::Error,
-                    "语音模型尚未就绪",
-                    "正在准备本地模型，请稍后再试",
+                    ts!("语音模型尚未就绪", "Speech model not ready"),
+                    ts!(
+                        "正在准备本地模型，请稍后再试",
+                        "Preparing the local model, please try again shortly",
+                    ),
                     Some(Duration::from_secs(2)),
                 );
             }
@@ -157,11 +170,14 @@ impl VoxKeyApp {
         self.session_active = true;
         let key = parse_hotkey(&self.config.hotkey)
             .map(|spec| spec.label)
-            .unwrap_or_else(|_| "快捷键".to_string());
+            .unwrap_or_else(|_| ts!("快捷键", "hotkey").to_string());
         self.overlay.present(
             OverlayKind::Listening,
-            "正在聆听…",
-            format!("按住 {key} 说话，松开后插入"),
+            ts!("正在聆听…", "Listening…"),
+            trf!(
+                "按住 {key} 说话，松开后插入",
+                "Hold {key} to speak, release to insert"
+            ),
             None,
         );
     }
@@ -171,11 +187,11 @@ impl VoxKeyApp {
             return;
         }
         self.engine.stop();
-        if self.overlay.title == "正在聆听…" || self.overlay.title.is_empty() {
-            self.overlay.title = "正在识别…".to_string();
+        if self.overlay.kind == OverlayKind::Listening || self.overlay.title.is_empty() {
+            self.overlay.title = ts!("正在识别…", "Recognizing…").to_string();
         }
         self.overlay.kind = OverlayKind::Working;
-        self.overlay.set_detail("正在识别…");
+        self.overlay.set_detail(ts!("正在识别…", "Recognizing…"));
     }
 
     fn on_tray_action(&mut self, ctx: &egui::Context, action: TrayAction) {
@@ -192,7 +208,7 @@ impl VoxKeyApp {
                 platform::open_url(&path);
                 self.overlay.present(
                     OverlayKind::Success,
-                    "已打开模型目录",
+                    ts!("已打开模型目录", "Model folder opened"),
                     path,
                     Some(Duration::from_secs(4)),
                 );
@@ -204,7 +220,7 @@ impl VoxKeyApp {
                 if let Err(err) = self.config.save() {
                     self.overlay.present(
                         OverlayKind::Error,
-                        "无法保存设置",
+                        ts!("无法保存设置", "Cannot save settings"),
                         err,
                         Some(Duration::from_secs(5)),
                     );
@@ -217,7 +233,7 @@ impl VoxKeyApp {
                     if let Err(err) = self.config.save() {
                         self.overlay.present(
                             OverlayKind::Error,
-                            "无法保存设置",
+                            ts!("无法保存设置", "Cannot save settings"),
                             err,
                             Some(Duration::from_secs(5)),
                         );
@@ -232,6 +248,8 @@ impl VoxKeyApp {
         if !self.show_settings {
             self.settings.reset_from(&self.config);
             self.show_settings = true;
+            // A reopened settings viewport gets a brand new native window.
+            self.settings_icon_applied = false;
         }
         self.focus_settings = true;
         ctx.request_repaint();
@@ -257,7 +275,13 @@ impl VoxKeyApp {
             });
         if let Err(err) = spawn {
             self.update.checking = false;
-            self.update.message = Some((false, format!("无法启动更新检查：{err}")));
+            self.update.message = Some((
+                false,
+                trf!(
+                    "无法启动更新检查：{err}",
+                    "Cannot start the update check: {err}"
+                ),
+            ));
         }
     }
 
@@ -292,7 +316,13 @@ impl VoxKeyApp {
         if let Err(err) = spawn {
             self.update.downloading = false;
             self.update.progress = None;
-            self.update.message = Some((false, format!("无法启动更新下载：{err}")));
+            self.update.message = Some((
+                false,
+                trf!(
+                    "无法启动更新下载：{err}",
+                    "Cannot start the update download: {err}"
+                ),
+            ));
         }
     }
 
@@ -301,8 +331,14 @@ impl VoxKeyApp {
             UpdateEvent::CheckFinished(Ok(None)) => {
                 self.update.checking = false;
                 self.update.info = None;
-                self.update.message =
-                    Some((true, format!("已是最新版本 v{}", update::current_version())));
+                self.update.message = Some((
+                    true,
+                    trf!(
+                        "已是最新版本 v{}",
+                        "Already up to date: v{}",
+                        update::current_version()
+                    ),
+                ));
             }
             UpdateEvent::CheckFinished(Ok(Some(info))) => {
                 self.update.checking = false;
@@ -311,7 +347,10 @@ impl VoxKeyApp {
             }
             UpdateEvent::CheckFinished(Err(err)) => {
                 self.update.checking = false;
-                self.update.message = Some((false, format!("检查更新失败：{err}")));
+                self.update.message = Some((
+                    false,
+                    trf!("检查更新失败：{err}", "Update check failed: {err}"),
+                ));
             }
             UpdateEvent::Progress { downloaded, total } => {
                 self.update.progress = Some((downloaded, total));
@@ -324,7 +363,10 @@ impl VoxKeyApp {
             UpdateEvent::Failed(err) => {
                 self.update.downloading = false;
                 self.update.progress = None;
-                self.update.message = Some((false, format!("下载更新失败：{err}")));
+                self.update.message = Some((
+                    false,
+                    trf!("下载更新失败：{err}", "Update download failed: {err}"),
+                ));
             }
         }
         ctx.request_repaint();
@@ -334,11 +376,21 @@ impl VoxKeyApp {
         match update::install_and_restart(path) {
             Ok(()) => {
                 crate::logging::info("已启动新版本，准备退出旧进程");
-                self.update.message = Some((true, "新版本已启动，VoxKey 即将重启…".to_string()));
+                self.update.message = Some((
+                    true,
+                    ts!(
+                        "新版本已启动，VoxKey 即将重启…",
+                        "The new version has started; VoxKey is restarting…"
+                    )
+                    .to_string(),
+                ));
                 self.request_quit(ctx);
             }
             Err(err) => {
-                self.update.message = Some((false, format!("安装更新失败：{err}")));
+                self.update.message = Some((
+                    false,
+                    trf!("安装更新失败：{err}", "Cannot install the update: {err}"),
+                ));
             }
         }
     }
@@ -378,8 +430,8 @@ impl VoxKeyApp {
         self.download_rate = 0.0;
         self.overlay.present(
             OverlayKind::Download,
-            "正在准备本地语音模型",
-            "重新检查模型文件…",
+            ts!("正在准备本地语音模型", "Preparing the local speech model"),
+            ts!("重新检查模型文件…", "Re-checking the model files…"),
             None,
         );
         self.engine.reload_model();
@@ -394,8 +446,11 @@ impl VoxKeyApp {
         self.importing_model = true;
         self.overlay.present(
             OverlayKind::Download,
-            "正在导入本地模型",
-            "校验文件大小与 SHA-256…",
+            ts!("正在导入本地模型", "Importing the local model"),
+            ts!(
+                "校验文件大小与 SHA-256…",
+                "Verifying file sizes and SHA-256…"
+            ),
             None,
         );
         self.settings.model_message = None;
@@ -419,7 +474,13 @@ impl VoxKeyApp {
             });
         if let Err(err) = spawn {
             self.importing_model = false;
-            self.settings.model_message = Some((false, format!("无法启动导入线程：{err}")));
+            self.settings.model_message = Some((
+                false,
+                trf!(
+                    "无法启动导入线程：{err}",
+                    "Cannot start the import thread: {err}"
+                ),
+            ));
         }
     }
 
@@ -434,8 +495,11 @@ impl VoxKeyApp {
                 self.download_rate = 0.0;
                 self.overlay.present(
                     OverlayKind::Download,
-                    "正在加载语音模型",
-                    "本地模型已导入，正在加载…",
+                    ts!("正在加载语音模型", "Loading the speech model"),
+                    ts!(
+                        "本地模型已导入，正在加载…",
+                        "Local model imported, loading…"
+                    ),
                     None,
                 );
                 self.engine.reload_model();
@@ -443,8 +507,9 @@ impl VoxKeyApp {
             Ok(ImportOutcome::Empty { dir }) => {
                 let path = dir.display().to_string();
                 platform::open_url(&path);
-                let message = format!(
+                let message = trf!(
                     "已打开导入目录 {}。把 {} 与 {} 放进去，再从托盘选择“导入本地模型”。",
+                    "Opened the import folder {}. Put {} and {} there, then choose “Import local model” from the tray menu.",
                     path,
                     model::MODEL_FILE,
                     model::TOKENS_FILE
@@ -453,8 +518,11 @@ impl VoxKeyApp {
                 self.settings.model_message = Some((false, message));
                 self.overlay.present(
                     OverlayKind::Error,
-                    "还没有可导入的模型",
-                    "已打开导入目录，放入文件后再导入一次",
+                    ts!("还没有可导入的模型", "No model to import yet"),
+                    ts!(
+                        "已打开导入目录，放入文件后再导入一次",
+                        "The import folder was opened; add the files and import again"
+                    ),
                     Some(Duration::from_secs(6)),
                 );
             }
@@ -463,8 +531,11 @@ impl VoxKeyApp {
                 self.settings.model_message = Some((false, err));
                 self.overlay.present(
                     OverlayKind::Error,
-                    "本地模型导入失败",
-                    "详细原因见设置窗口或 voxkey.log",
+                    ts!("本地模型导入失败", "Local model import failed"),
+                    ts!(
+                        "详细原因见设置窗口或 voxkey.log",
+                        "See the settings window or voxkey.log for details"
+                    ),
                     Some(Duration::from_secs(8)),
                 );
             }
@@ -526,8 +597,12 @@ impl VoxKeyApp {
                 if rate > 0.05 {
                     detail.push_str(&format!(" · {rate:.1} MB/s"));
                 }
-                self.overlay
-                    .present(OverlayKind::Download, "正在准备本地语音模型", detail, None);
+                self.overlay.present(
+                    OverlayKind::Download,
+                    ts!("正在准备本地语音模型", "Preparing the local speech model"),
+                    detail,
+                    None,
+                );
             }
             EngineEvent::ModelError(err) => {
                 self.engine_ready = false;
@@ -539,14 +614,20 @@ impl VoxKeyApp {
                 self.settings.model_message = Some((false, err));
                 self.overlay.present(
                     OverlayKind::Error,
-                    "本地语音模型未就绪",
-                    "可手动下载后从托盘“导入本地模型”（见 docs/offline-model.md）",
+                    ts!("本地语音模型未就绪", "The local speech model is not ready"),
+                    ts!(
+                        "可手动下载后从托盘“导入本地模型”（见 docs/offline-model.md）",
+                        "You can download it manually and use “Import local model” in the tray menu (see docs/offline-model.md)"
+                    ),
                     Some(Duration::from_secs(20)),
                 );
             }
             EngineEvent::RecordingStarted => {
                 self.overlay.kind = OverlayKind::Listening;
-                self.overlay.set_detail("正在聆听… 松开快捷键结束");
+                self.overlay.set_detail(ts!(
+                    "正在聆听… 松开快捷键结束",
+                    "Listening… release the hotkey to finish"
+                ));
             }
             EngineEvent::Level(level) => {
                 if self.session_active {
@@ -557,33 +638,43 @@ impl VoxKeyApp {
                 if self.session_active {
                     self.overlay.kind = OverlayKind::Listening;
                     self.overlay.set_transcript(text);
-                    self.overlay.set_detail("正在聆听… 松开快捷键结束");
+                    self.overlay.set_detail(ts!(
+                        "正在聆听… 松开快捷键结束",
+                        "Listening… release the hotkey to finish"
+                    ));
                 }
             }
             EngineEvent::Recognizing => {
                 if !self.session_active {
                     return;
                 }
-                let title = if self.overlay.title.is_empty() || self.overlay.title == "正在聆听…"
+                let title = if self.overlay.title.is_empty()
+                    || self.overlay.kind == OverlayKind::Listening
                 {
-                    "正在识别…".to_string()
+                    ts!("正在识别…", "Recognizing…").to_string()
                 } else {
                     self.overlay.title.clone()
                 };
-                self.overlay
-                    .present(OverlayKind::Working, title, "正在识别语音…", None);
+                self.overlay.present(
+                    OverlayKind::Working,
+                    title,
+                    ts!("正在识别语音…", "Recognizing speech…"),
+                    None,
+                );
             }
             EngineEvent::Refining => {
                 self.overlay.present(
                     OverlayKind::Working,
                     self.overlay.title.clone(),
-                    "LLM 纠错中…",
+                    ts!("LLM 纠错中…", "LLM cleanup running…"),
                     None,
                 );
             }
             EngineEvent::Done { text, warning } => {
                 self.session_active = false;
-                let detail = warning.unwrap_or_else(|| "已插入当前输入框".to_string());
+                let detail = warning.unwrap_or_else(|| {
+                    ts!("已插入当前输入框", "Inserted into the focused field").to_string()
+                });
                 self.overlay.present(
                     OverlayKind::Success,
                     text,
@@ -595,7 +686,7 @@ impl VoxKeyApp {
                 self.session_active = false;
                 self.overlay.present(
                     OverlayKind::Error,
-                    "未能插入文字",
+                    ts!("未能插入文字", "Could not insert the text"),
                     err,
                     Some(Duration::from_secs(5)),
                 );
@@ -637,18 +728,26 @@ impl VoxKeyApp {
         {
             self.settings.message = Some((
                 false,
-                "API Base URL 必须以 http:// 或 https:// 开头".to_string(),
+                ts!(
+                    "API Base URL 必须以 http:// 或 https:// 开头",
+                    "API Base URL must start with http:// or https://"
+                )
+                .to_string(),
             ));
             return;
         }
         if draft.model.is_empty() {
-            self.settings.message = Some((false, "Model 不能为空".to_string()));
+            self.settings.message = Some((
+                false,
+                ts!("Model 不能为空", "Model must not be empty").to_string(),
+            ));
             return;
         }
         let spec = match parse_hotkey(&draft.hotkey) {
             Ok(spec) => spec,
             Err(err) => {
-                self.settings.message = Some((false, format!("快捷键无效：{err}")));
+                self.settings.message =
+                    Some((false, trf!("快捷键无效：{err}", "Invalid hotkey: {err}")));
                 return;
             }
         };
@@ -662,11 +761,16 @@ impl VoxKeyApp {
                 self.settings.draft = next;
                 self.settings.message = Some((
                     true,
-                    "已保存。API Key 已使用 Windows DPAPI 加密。".to_string(),
+                    ts!(
+                        "已保存。API Key 已使用 Windows DPAPI 加密。",
+                        "Saved. The API key is encrypted with Windows DPAPI."
+                    )
+                    .to_string(),
                 ));
             }
             Err(err) => {
-                self.settings.message = Some((false, format!("保存失败：{err}")));
+                self.settings.message =
+                    Some((false, trf!("保存失败：{err}", "Cannot save: {err}")));
             }
         }
     }
@@ -693,21 +797,30 @@ impl VoxKeyApp {
                     .build()
                 {
                     Ok(runtime) => runtime.block_on(llm::test_connection(&cfg)),
-                    Err(err) => Err(format!("无法创建网络运行时: {err}")),
+                    Err(err) => Err(trf!(
+                        "无法创建网络运行时: {err}",
+                        "Cannot create the network runtime: {err}"
+                    )),
                 };
                 let _ = tx.send(UiEvent::LlmTestResult(result));
                 ctx.request_repaint();
             });
         if let Err(err) = spawn {
             self.settings.testing = false;
-            self.settings.message = Some((false, format!("无法启动测试线程: {err}")));
+            self.settings.message = Some((
+                false,
+                trf!(
+                    "无法启动测试线程: {err}",
+                    "Cannot start the test thread: {err}"
+                ),
+            ));
         }
     }
 
     fn draw_settings(&mut self, ctx: &egui::Context) -> SettingsAction {
         let viewport_id = egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME);
         let builder = egui::ViewportBuilder::default()
-            .with_title("VoxKey 设置")
+            .with_title(settings_window_title())
             .with_inner_size([520.0, 780.0])
             .with_min_inner_size([440.0, 560.0])
             .with_resizable(true)
@@ -721,6 +834,17 @@ impl VoxKeyApp {
             settings::draw(ui, &mut self.settings, &mut self.update)
         });
 
+        // eframe creates the viewport's native window after the UI callback
+        // returns, so the icon is applied on the first frame in which the
+        // window can actually be found. The class icons set for the overlay are
+        // normally enough; this also covers windows that already exist when the
+        // class icon changes.
+        if !self.settings_icon_applied
+            && platform::apply_icon_to_window_titled(settings_window_title())
+        {
+            self.settings_icon_applied = true;
+        }
+
         if self.focus_settings {
             ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Focus);
             self.focus_settings = false;
@@ -728,6 +852,9 @@ impl VoxKeyApp {
 
         if close_requested {
             self.show_settings = false;
+            self.settings_icon_applied = false;
+            // Closing without Save must not leave a previewed language active.
+            crate::i18n::reapply(self.config.ui_language);
             ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
         }
 
@@ -906,46 +1033,4 @@ impl Drop for VoxKeyApp {
         self.engine.shutdown();
         self.platform.shutdown();
     }
-}
-
-fn install_fonts_and_style(ctx: &egui::Context) {
-    let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(
-        "voxkey_cjk".to_string(),
-        std::sync::Arc::new(FontData::from_static(include_bytes!(
-            "../assets/NotoSansCJKsc-Regular.otf"
-        ))),
-    );
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .insert(0, "voxkey_cjk".to_string());
-    }
-    ctx.set_fonts(fonts);
-
-    // egui 0.37 stores one `Style` per theme, so the palette and text styles
-    // are applied through `all_styles_mut` to cover every theme.
-    ctx.all_styles_mut(|style| {
-        style.visuals = egui::Visuals::dark();
-        style.visuals.panel_fill = Color32::from_rgb(18, 20, 27);
-        style.visuals.window_fill = Color32::from_rgb(18, 20, 27);
-        style.visuals.extreme_bg_color = Color32::from_rgb(12, 14, 19);
-        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 38, 49);
-        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(44, 49, 63);
-        style.visuals.widgets.active.bg_fill = Color32::from_rgb(54, 60, 77);
-        style.visuals.selection.bg_fill = Color32::from_rgb(53, 101, 79);
-        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-        style.spacing.button_padding = Vec2::new(10.0, 5.0);
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, FontId::proportional(13.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Button, FontId::proportional(13.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Small, FontId::proportional(10.5));
-    });
 }

@@ -5,12 +5,14 @@ VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住�
 - 纯 Rust，原生 Win32 + egui 悬浮窗，无 Electron / WebView。
 - 本地识别使用 sherpa-onnx SenseVoice 多语言模型，默认简体中文，支持 English、繁體中文、日本語、한국어。
 - 首次运行自动下载模型到本机缓存；之后可完全离线运行。
-- Release 构建为单个 `VoxKey.exe`，绿色免安装，不使用 MSIX / MSI / 安装程序。
+- `VoxKey.exe` 本体约 **5.3 MB**：UI、全局钩子、托盘、剪贴板与下载器。
+- SenseVoice 推理在独立进程 `VoxKey-asr.exe`（约 19 MB）中运行，首次运行自动下载，与模型一样存放在 `%LOCALAPPDATA%\VoxKey\`。
+- 绿色免安装，不使用 MSIX / MSI / 安装程序；UI 本身仍是单个 exe。
 
 ## 快速开始
 
 1. 从 [Releases](https://github.com/katriyda/VoxKey/releases) 下载 `VoxKey.exe`，双击运行。程序无主窗口，常驻系统托盘。
-2. 首次运行会下载 SenseVoice int8 模型（约 229 MB），底部悬浮窗显示进度与速率；支持断点续传与镜像回退。网络受限时可手动导入，见 [docs/offline-model.md](docs/offline-model.md)。
+2. 首次运行会先下载语音引擎 `VoxKey-asr.exe`（约 19 MB，SHA-256 校验），再下载 SenseVoice int8 模型（约 229 MB）；底部悬浮窗显示进度与速率，支持断点续传与镜像回退。网络受限时可手动导入模型，见 [docs/offline-model.md](docs/offline-model.md)。
 3. 默认按住**右 Ctrl**说话，松开后自动识别并插入。托盘 → `设置…` 可改为 `Ctrl + Shift + 空格`、`Fn / F13`，或任意受支持的组合（如 `ctrl+alt+space`、`f13`、`right_alt`）。
 
 > Fn 键在多数笔记本上由键盘固件消费，Windows 全局钩子无法可靠监听；右 Ctrl 是可靠性优先的默认方案。细节见 [docs/usage.md](docs/usage.md#关于-fn-键)。
@@ -33,7 +35,10 @@ VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住�
 | 设置文件 | `%APPDATA%\VoxKey\config.json` | `VOXKEY_DATA_DIR` |
 | 模型缓存 | `%LOCALAPPDATA%\VoxKey\models\sensevoice-int8\` | `VOXKEY_MODEL_DIR` |
 | 手动导入目录 | `%LOCALAPPDATA%\VoxKey\models\inbox\` | `VOXKEY_IMPORT_DIR` |
+| 语音引擎 | `%LOCALAPPDATA%\VoxKey\bin\VoxKey-asr-<版本>.exe` | `VOXKEY_ASR_EXE`（只读指向文件） |
 | 错误日志 | `%APPDATA%\VoxKey\voxkey.log` | `VOXKEY_DATA_DIR` |
+
+界面字体不从程序内嵌：启动时读取 `C:\Windows\Fonts`（Segoe UI + 微软雅黑/宋体）。系统没有中文字体时界面自动切换为英文；也可在设置里显式选择界面语言。若确实需要内嵌 16 MB 的 Noto CJK，用 `--features embed-cjk-font` 构建。
 
 API Key 不会以明文写入配置文件；配置字段、LLM 约束与剪贴板限制见 [docs/configuration.md](docs/configuration.md)。
 

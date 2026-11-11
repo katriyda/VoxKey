@@ -19,23 +19,26 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CallWindowProcW, CreateIconFromResourceEx,
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC, GetCursorPos, GetForegroundWindow,
-    GetMessageW, GetWindowLongPtrW, HICON, HMENU, HTTRANSPARENT, IDC_ARROW, IDI_APPLICATION,
-    IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LoadCursorW, LoadIconW, MENU_ITEM_FLAGS, MSG,
-    PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW, SPI_GETWORKAREA,
-    SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    SetWindowsHookExW, SystemParametersInfoW, TRACK_POPUP_MENU_FLAGS, TrackPopupMenu,
-    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCHITTEST, WM_NULL, WM_QUIT, WM_RBUTTONUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    DispatchMessageW, FindWindowW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC,
+    GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON,
+    HMENU, HTTRANSPARENT, ICON_BIG, ICON_SMALL, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS,
+    IMAGE_ICON, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LoadCursorW, LoadIconW, LoadImageW,
+    MENU_ITEM_FLAGS, MSG, PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW,
+    SM_CXICON, SM_CXSMICON, SPI_GETWORKAREA, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SetClassLongPtrW,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW,
+    TRACK_POPUP_MENU_FLAGS, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCHITTEST,
+    WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SETICON, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC,
+    WS_CAPTION, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::PCWSTR;
 
 use crate::config::Language;
 use crate::events::{TrayAction, UiEvent};
 use crate::hotkey::{HotkeySpec, modifier_family};
+use crate::i18n::{trf, ts};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TrayState {
@@ -84,8 +87,10 @@ impl Platform {
                 .name("voxkey-hotkey".to_string())
                 .spawn(move || run_hook(thread_id, ctx, spawn_tx))
                 .map_err(move |e| {
-                    let _ =
-                        error_tx.send(UiEvent::PlatformError(format!("无法启动快捷键线程: {e}")));
+                    let _ = error_tx.send(UiEvent::PlatformError(trf!(
+                        "无法启动快捷键线程: {e}",
+                        "Cannot start the hotkey thread: {e}"
+                    )));
                 })
                 .ok()
         };
@@ -101,7 +106,10 @@ impl Platform {
                 .name("voxkey-tray".to_string())
                 .spawn(move || run_tray(thread_id, ctx, spawn_tx, state, icon_bytes))
                 .map_err(move |e| {
-                    let _ = error_tx.send(UiEvent::PlatformError(format!("无法启动托盘线程: {e}")));
+                    let _ = error_tx.send(UiEvent::PlatformError(trf!(
+                        "无法启动托盘线程: {e}",
+                        "Cannot start the tray thread: {e}"
+                    )));
                 })
                 .ok()
         };
@@ -242,7 +250,10 @@ fn run_hook(thread_id: Arc<AtomicU32>, ctx: egui::Context, tx: std::sync::mpsc::
             send_ui(
                 &tx,
                 &ctx,
-                UiEvent::PlatformError(format!("无法获取模块句柄: {e}")),
+                UiEvent::PlatformError(trf!(
+                    "无法获取模块句柄: {e}",
+                    "Cannot obtain the module handle: {e}"
+                )),
             );
             return;
         }
@@ -257,8 +268,9 @@ fn run_hook(thread_id: Arc<AtomicU32>, ctx: egui::Context, tx: std::sync::mpsc::
             send_ui(
                 &tx,
                 &ctx,
-                UiEvent::PlatformError(format!(
-                    "无法安装全局快捷键钩子: {e}. 可尝试以普通用户权限重新启动应用"
+                UiEvent::PlatformError(trf!(
+                    "无法安装全局快捷键钩子: {e}. 可尝试以普通用户权限重新启动应用",
+                    "Cannot install the global hotkey hook: {e}. Try starting the app as a regular user"
                 )),
             );
             return;
@@ -328,6 +340,7 @@ fn run_tray(
     unsafe {
         thread_id.store(GetCurrentThreadId(), Ordering::Release);
     }
+    crate::logging::info("托盘线程已启动");
 
     let module = match unsafe { GetModuleHandleW(None) } {
         Ok(module) => module,
@@ -335,7 +348,10 @@ fn run_tray(
             send_ui(
                 &tx,
                 &ctx,
-                UiEvent::PlatformError(format!("无法获取模块句柄: {e}")),
+                UiEvent::PlatformError(trf!(
+                    "无法获取模块句柄: {e}",
+                    "Cannot obtain the module handle: {e}"
+                )),
             );
             return;
         }
@@ -343,6 +359,10 @@ fn run_tray(
     let hinstance = HINSTANCE::from(module);
 
     let (mut icon, mut owns_icon) = create_tray_icon(icon_bytes);
+    crate::logging::info(&format!(
+        "托盘图标创建完成: hicon={:?} owned={owns_icon}",
+        icon.0
+    ));
     let class_name = wide(TRAY_CLASS);
     let title = wide(TRAY_WINDOW_TITLE);
     let cursor = unsafe { LoadCursorW(None, IDC_ARROW).unwrap_or_default() };
@@ -362,10 +382,18 @@ fn run_tray(
 
     let atom = unsafe { RegisterClassW(&wndclass) };
     if atom == 0 {
+        let error = unsafe { GetLastError() }.0;
+        crate::logging::error(&format!("托盘窗口类注册失败（Win32 {error}）"));
         send_ui(
             &tx,
             &ctx,
-            UiEvent::PlatformError("无法注册托盘窗口类".to_string()),
+            UiEvent::PlatformError(
+                ts!(
+                    "无法注册托盘窗口类",
+                    "Cannot register the tray window class"
+                )
+                .to_string(),
+            ),
         );
         if owns_icon {
             unsafe {
@@ -393,10 +421,14 @@ fn run_tray(
     } {
         Ok(hwnd) => hwnd,
         Err(e) => {
+            crate::logging::error(&format!("托盘窗口创建失败: {e}"));
             send_ui(
                 &tx,
                 &ctx,
-                UiEvent::PlatformError(format!("无法创建托盘窗口: {e}")),
+                UiEvent::PlatformError(trf!(
+                    "无法创建托盘窗口: {e}",
+                    "Cannot create the tray window: {e}"
+                )),
             );
             if owns_icon {
                 unsafe {
@@ -416,10 +448,17 @@ fn run_tray(
         hIcon: icon,
         ..Default::default()
     };
-    fill_wide_buffer(&mut nid.szTip, "VoxKey · 按住快捷键说话");
+    fill_wide_buffer(
+        &mut nid.szTip,
+        ts!(
+            "VoxKey · 按住快捷键说话",
+            "VoxKey · hold the hotkey to speak"
+        ),
+    );
 
     if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
         let first_error = unsafe { GetLastError() }.0;
+        crate::logging::error(&format!("托盘图标 NIM_ADD 失败（Win32 {first_error}）"));
         // The embedded .ico is a nice-to-have; never let icon parsing prevent
         // the tray from working. Retry once with the stock application icon.
         if owns_icon {
@@ -432,11 +471,15 @@ fn run_tray(
         nid.hIcon = icon;
         if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
             let second_error = unsafe { GetLastError() }.0;
+            crate::logging::error(&format!(
+                "托盘图标使用默认图标重试仍失败（Win32 {second_error}）"
+            ));
             send_ui(
                 &tx,
                 &ctx,
-                UiEvent::PlatformError(format!(
-                    "无法添加系统托盘图标（Win32 {first_error}/{second_error}）"
+                UiEvent::PlatformError(trf!(
+                    "无法添加系统托盘图标（Win32 {first_error}/{second_error}）",
+                    "Cannot add the tray icon (Win32 {first_error}/{second_error})"
                 )),
             );
             cleanup_tray(hwnd, icon, owns_icon, &nid);
@@ -451,6 +494,7 @@ fn run_tray(
         state,
     });
     let _ = TRAY_RUNTIME.set(Arc::clone(&runtime));
+    crate::logging::info("托盘图标已添加，托盘消息循环开始");
 
     let mut message = MSG::default();
     loop {
@@ -559,18 +603,48 @@ fn show_tray_menu(runtime: &TrayRuntime) {
         menu,
         0,
         ID_TOGGLE_LLM as usize,
-        "LLM 纠错",
+        ts!("LLM 纠错", "LLM cleanup"),
         state.llm_enabled,
     );
-    append_menu(menu, 0, ID_CHECK_UPDATE as usize, "检查更新…", false);
+    append_menu(
+        menu,
+        0,
+        ID_CHECK_UPDATE as usize,
+        ts!("检查更新…", "Check for updates…"),
+        false,
+    );
     append_menu(menu, 0x800, 0, "", false);
-    append_menu(menu, 0, ID_IMPORT_MODEL as usize, "导入本地模型…", false);
-    append_menu(menu, 0, ID_OPEN_MODEL_DIR as usize, "打开模型目录…", false);
-    append_menu(menu, 0, ID_RELOAD_MODEL as usize, "重新加载模型", false);
+    append_menu(
+        menu,
+        0,
+        ID_IMPORT_MODEL as usize,
+        ts!("导入本地模型…", "Import local model…"),
+        false,
+    );
+    append_menu(
+        menu,
+        0,
+        ID_OPEN_MODEL_DIR as usize,
+        ts!("打开模型目录…", "Open model folder…"),
+        false,
+    );
+    append_menu(
+        menu,
+        0,
+        ID_RELOAD_MODEL as usize,
+        ts!("重新加载模型", "Reload model"),
+        false,
+    );
     append_menu(menu, 0x800, 0, "", false);
-    append_menu(menu, 0, ID_SETTINGS as usize, "设置…", false);
+    append_menu(
+        menu,
+        0,
+        ID_SETTINGS as usize,
+        ts!("设置…", "Settings…"),
+        false,
+    );
     append_menu(menu, 0x800, 0, "", false);
-    append_menu(menu, 0, ID_EXIT as usize, "退出", false);
+    append_menu(menu, 0, ID_EXIT as usize, ts!("退出", "Quit"), false);
 
     let mut point = POINT::default();
     unsafe {
@@ -662,6 +736,11 @@ fn handle_menu_command(id: u32) {
     }
 }
 
+/// The application icon, compiled into the executable as resource id 1 by
+/// `build.rs` and also embedded here so window icons work in builds made with
+/// `VOXKEY_SKIP_RC=1` (and in debug builds).
+pub const APP_ICON_BYTES: &[u8] = include_bytes!("../assets/voxkey.ico");
+
 fn create_tray_icon(bytes: &[u8]) -> (HICON, bool) {
     if let Some(icon) = icon_from_ico(bytes) {
         return (icon, true);
@@ -673,10 +752,21 @@ fn create_tray_icon(bytes: &[u8]) -> (HICON, bool) {
 }
 
 fn icon_from_ico(bytes: &[u8]) -> Option<HICON> {
+    icon_from_ico_at(bytes, 32)
+}
+
+/// Builds an `HICON` from the `.ico` for a specific pixel size.
+///
+/// `CreateIconFromResourceEx` accepts the raw image payload of one icon
+/// directory entry, so the frame closest to the requested size is picked and
+/// handed to the API with the exact target size (it scales, but only badly, so
+/// the source frame should already match).
+fn icon_from_ico_at(bytes: &[u8], target: i32) -> Option<HICON> {
     if bytes.len() < 6 || bytes[0..4] != [0, 0, 1, 0] {
         return None;
     }
     let count = read_u16(bytes, 4)? as usize;
+    let target = target.max(1) as u32;
     let mut best: Option<(u32, usize, usize)> = None;
 
     for index in 0..count {
@@ -694,15 +784,15 @@ fn icon_from_ico(bytes: &[u8]) -> Option<HICON> {
         if offset + size > bytes.len() {
             continue;
         }
-        let score = if width == 32 {
-            100
-        } else if width <= 64 {
-            50
+        // Exact matches win, then the smallest frame that still covers the
+        // target (downscaling looks better than upscaling).
+        let distance = if width >= target {
+            width - target
         } else {
-            10
+            1000 + (target - width)
         };
-        if best.map(|(s, _, _)| score > s).unwrap_or(true) {
-            best = Some((score, offset, size));
+        if best.map(|(s, _, _)| distance < s).unwrap_or(true) {
+            best = Some((distance, offset, size));
         }
     }
 
@@ -712,12 +802,104 @@ fn icon_from_ico(bytes: &[u8]) -> Option<HICON> {
             &bytes[offset..offset + size],
             true,
             0x0003_0000,
-            32,
-            32,
+            target as i32,
+            target as i32,
             IMAGE_FLAGS(0),
         )
         .ok()
     }
+}
+
+/// Icons used for window title bars, Alt-Tab and the taskbar.
+///
+/// They live for the whole process: the window class keeps a reference to them
+/// (see [`apply_window_icon`]), so they must never be destroyed.
+static WINDOW_ICONS: OnceLock<(isize, isize)> = OnceLock::new();
+
+fn window_icons() -> (isize, isize) {
+    *WINDOW_ICONS.get_or_init(|| {
+        let big = load_window_icon(unsafe { GetSystemMetrics(SM_CXICON) });
+        let small = load_window_icon(unsafe { GetSystemMetrics(SM_CXSMICON) });
+        (big, small)
+    })
+}
+
+/// Loads a window icon at `size` from the executable's resources, falling back
+/// to the embedded `.ico` when the resource block is absent.
+fn load_window_icon(size: i32) -> isize {
+    let size = if size > 0 { size } else { 32 };
+    unsafe {
+        // Resource id 1 of the icon group compiled in by build.rs. LoadImageW
+        // picks the best matching frame of the group, so high-DPI small icons
+        // stay crisp instead of being downscaled from 32x32 or 256x256.
+        if let Ok(module) = GetModuleHandleW(None) {
+            let instance = Some(HINSTANCE::from(module));
+            if let Ok(handle) = LoadImageW(
+                instance,
+                PCWSTR(1 as *const u16),
+                IMAGE_ICON,
+                size,
+                size,
+                IMAGE_FLAGS(0),
+            ) && !handle.0.is_null()
+            {
+                return handle.0 as isize;
+            }
+        }
+    }
+    icon_from_ico_at(APP_ICON_BYTES, size).map_or(0, |icon| icon.0 as isize)
+}
+
+/// Assigns VoxKey's icon to `hwnd` and to its window class.
+///
+/// winit sets `ICON_SMALL` only when a window icon was supplied, and never sets
+/// `ICON_BIG` at all, so a fresh window otherwise shows the generic placeholder
+/// in its title bar and taskbar button. Setting the class icons as well makes
+/// every window winit creates later (the settings viewport) inherit them at
+/// creation time, before it is ever painted.
+pub fn apply_window_icon(hwnd: HWND) {
+    if hwnd.is_invalid() {
+        return;
+    }
+    let (big, small) = window_icons();
+    unsafe {
+        if big != 0 {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(big)),
+            );
+            SetClassLongPtrW(hwnd, GCLP_HICON, big);
+        }
+        if small != 0 {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(small)),
+            );
+            SetClassLongPtrW(hwnd, GCLP_HICONSM, small);
+        }
+    }
+}
+
+/// Applies the application icon to the top-level window with `title`.
+///
+/// Returns `false` while the window does not exist yet, so callers can retry
+/// on the next frame: eframe creates viewport windows after the UI callback has
+/// finished, so the settings window becomes findable one frame after its first
+/// `show_viewport_immediate` call.
+pub fn apply_icon_to_window_titled(title: &str) -> bool {
+    let title = wide(title);
+    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) }) else {
+        return false;
+    };
+    if hwnd.is_invalid() {
+        return false;
+    }
+    apply_window_icon(hwnd);
+    true
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -815,6 +997,11 @@ pub fn configure_overlay_window(hwnd: HWND) {
             );
         }
     }
+
+    // The overlay is borderless and taskbar-less, but the class icons set here
+    // are inherited by every window winit creates afterwards — most notably the
+    // settings viewport, whose title bar and taskbar button had no icon at all.
+    apply_window_icon(hwnd);
 }
 
 pub fn foreground_window() -> Option<HWND> {

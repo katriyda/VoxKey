@@ -5,6 +5,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::i18n::{trf, ts};
+
 pub struct Recorder {
     stream: Option<cpal::Stream>,
     buffer: Arc<Mutex<Vec<f32>>>,
@@ -16,26 +18,37 @@ pub struct Recorder {
 impl Recorder {
     pub fn start() -> Result<Self, String> {
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| "没有可用的麦克风输入设备".to_string())?;
+        let device = host.default_input_device().ok_or_else(|| {
+            ts!(
+                "没有可用的麦克风输入设备",
+                "No microphone input device is available"
+            )
+            .to_string()
+        })?;
         let device_name = {
             let name = device.to_string();
             if name.trim().is_empty() {
-                "默认麦克风".to_string()
+                ts!("默认麦克风", "Default microphone").to_string()
             } else {
                 name
             }
         };
-        let supported = device
-            .default_input_config()
-            .map_err(|e| format!("无法读取麦克风配置: {e}"))?;
+        let supported = device.default_input_config().map_err(|e| {
+            trf!(
+                "无法读取麦克风配置: {e}",
+                "Cannot read the microphone configuration: {e}"
+            )
+        })?;
         let sample_format = supported.sample_format();
         let config = supported.config();
         let channels = config.channels as usize;
         let sample_rate = config.sample_rate;
         if channels == 0 || sample_rate == 0 {
-            return Err("麦克风返回了无效的音频参数".to_string());
+            return Err(ts!(
+                "麦克风返回了无效的音频参数",
+                "The microphone reported invalid audio parameters"
+            )
+            .to_string());
         }
 
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
@@ -113,12 +126,17 @@ impl Recorder {
                 )
             }
             other => {
-                return Err(format!("当前麦克风的采样格式不受支持: {other:?}"));
+                return Err(trf!(
+                    "当前麦克风的采样格式不受支持: {other:?}",
+                    "The current microphone's sample format is not supported: {other:?}"
+                ));
             }
         }
-        .map_err(|e| format!("无法打开麦克风: {e}"))?;
+        .map_err(|e| trf!("无法打开麦克风: {e}", "Cannot open the microphone: {e}"))?;
 
-        stream.play().map_err(|e| format!("无法开始录音: {e}"))?;
+        stream
+            .play()
+            .map_err(|e| trf!("无法开始录音: {e}", "Cannot start recording: {e}"))?;
 
         Ok(Self {
             stream: Some(stream),

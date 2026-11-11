@@ -1,6 +1,7 @@
 //! In-app update from GitHub Releases.
 //!
-//! VoxKey ships as a single `VoxKey.exe`. The update path is therefore
+//! VoxKey ships as `VoxKey.exe` (the small UI) plus `VoxKey-asr.exe` (the
+//! SenseVoice engine worker, downloaded on first use). The update path is
 //! deliberately small and self-contained:
 //!
 //! 1. `check_blocking` asks the GitHub Releases API for the latest release and
@@ -21,12 +22,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::config;
+use crate::i18n::{trf, ts};
 
 const API_LATEST: &str = "https://api.github.com/repos/katriyda/VoxKey/releases/latest";
 const RELEASES_PAGE: &str = "https://github.com/katriyda/VoxKey/releases";
 const USER_AGENT: &str = concat!("VoxKey/", env!("CARGO_PKG_VERSION"));
-/// Release assets are the ~40 MB single-file executable. Anything smaller is
-/// not a plausible VoxKey build and is rejected before it is written to disk.
+/// Release assets are the UI executable (single-digit MB). Anything smaller
+/// than 1 MB is not a plausible VoxKey build and is rejected before it is
+/// written to disk.
 const MIN_BINARY_SIZE: u64 = 1_000_000;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -83,7 +86,12 @@ fn http_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| format!("无法创建网络运行时: {e}"))
+        .map_err(|e| {
+            trf!(
+                "无法创建网络运行时: {e}",
+                "Cannot create network runtime: {e}"
+            )
+        })
 }
 
 fn http_client() -> Result<reqwest::Client, String> {
@@ -91,7 +99,12 @@ fn http_client() -> Result<reqwest::Client, String> {
         .connect_timeout(Duration::from_secs(20))
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| format!("创建更新客户端失败: {e}"))
+        .map_err(|e| {
+            trf!(
+                "创建更新客户端失败: {e}",
+                "Failed to create update client: {e}"
+            )
+        })
 }
 
 /// Asks GitHub for the newest release. `Ok(None)` means the running build is
@@ -108,40 +121,61 @@ async fn check_async() -> Result<Option<ReleaseInfo>, String> {
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|e| format!("无法连接 GitHub：{e}"))?;
+        .map_err(|e| trf!("无法连接 GitHub：{e}", "Cannot connect to GitHub: {e}"))?;
 
     let status = response.status();
     if status == reqwest::StatusCode::NOT_FOUND {
-        return Err(format!("仓库还没有发布任何 Release。{RELEASES_PAGE}"));
+        return Err(trf!(
+            "仓库还没有发布任何 Release。{RELEASES_PAGE}",
+            "The repository has not published any release yet. {RELEASES_PAGE}"
+        ));
     }
     if !status.is_success() {
         let hint = if status == reqwest::StatusCode::FORBIDDEN
             || status == reqwest::StatusCode::TOO_MANY_REQUESTS
         {
-            "（GitHub API 请求频率受限，请稍后再试）"
+            ts!(
+                "（GitHub API 请求频率受限，请稍后再试）",
+                " (GitHub API rate limit exceeded, try again later)"
+            )
         } else {
             ""
         };
-        return Err(format!("GitHub API 返回 HTTP {status}{hint}"));
+        return Err(trf!(
+            "GitHub API 返回 HTTP {status}{hint}",
+            "GitHub API returned HTTP {status}{hint}"
+        ));
     }
 
-    let release: ApiRelease = response
-        .json()
-        .await
-        .map_err(|e| format!("无法解析 Release 信息：{e}"))?;
+    let release: ApiRelease = response.json().await.map_err(|e| {
+        trf!(
+            "无法解析 Release 信息：{e}",
+            "Cannot parse release information: {e}"
+        )
+    })?;
 
     let Some(version) = normalize_version(&release.tag_name) else {
-        return Err(format!("无法识别 Release 版本号：{}", release.tag_name));
+        return Err(trf!(
+            "无法识别 Release 版本号：{}",
+            "Cannot recognize release version: {}",
+            release.tag_name
+        ));
     };
     if !is_newer(&version, current_version()) {
         return Ok(None);
     }
 
-    let asset = select_asset(&release.assets)
-        .ok_or_else(|| "最新 Release 中没有 VoxKey.exe 资产".to_string())?;
+    let asset = select_asset(&release.assets).ok_or_else(|| {
+        ts!(
+            "最新 Release 中没有 VoxKey.exe 资产",
+            "No VoxKey.exe asset in the latest release"
+        )
+        .to_string()
+    })?;
     if asset.size < MIN_BINARY_SIZE {
-        return Err(format!(
+        return Err(trf!(
             "发布资产大小异常（{} 字节），已中止更新",
+            "Release asset has unexpected size ({} bytes); update aborted",
             asset.size
         ));
     }
@@ -185,9 +219,13 @@ async fn download_async(
     use tokio::io::AsyncWriteExt;
 
     let dir = updates_dir();
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|e| format!("无法创建更新目录 {}：{e}", dir.display()))?;
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| {
+        trf!(
+            "无法创建更新目录 {}：{e}",
+            "Cannot create update directory {}: {e}",
+            dir.display()
+        )
+    })?;
     let target = dir.join(format!("VoxKey-{}.exe", info.version));
     let part = dir.join(format!("VoxKey-{}.exe.part", info.version));
     let _ = tokio::fs::remove_file(&part).await;
@@ -197,21 +235,26 @@ async fn download_async(
         .get(&info.asset_url)
         .send()
         .await
-        .map_err(|e| format!("下载失败：{e}"))?;
+        .map_err(|e| trf!("下载失败：{e}", "Download failed: {e}"))?;
     if !response.status().is_success() {
-        return Err(format!("下载失败：HTTP {}", response.status()));
+        return Err(trf!(
+            "下载失败：HTTP {}",
+            "Download failed: HTTP {}",
+            response.status()
+        ));
     }
     let reported = response.content_length().unwrap_or(info.asset_size);
     if reported != info.asset_size {
-        return Err(format!(
+        return Err(trf!(
             "远端文件大小异常（期望 {}，实际 {reported}）",
+            "Remote file has unexpected size (expected {}, got {reported})",
             info.asset_size
         ));
     }
 
     let mut file = tokio::fs::File::create(&part)
         .await
-        .map_err(|e| format!("无法创建临时文件：{e}"))?;
+        .map_err(|e| trf!("无法创建临时文件：{e}", "Cannot create temporary file: {e}"))?;
     let total = info.asset_size;
     let mut downloaded = 0u64;
     let mut last_report = Instant::now();
@@ -219,11 +262,11 @@ async fn download_async(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|e| format!("下载中断：{e}"))?
+        .map_err(|e| trf!("下载中断：{e}", "Download interrupted: {e}"))?
     {
         file.write_all(&chunk)
             .await
-            .map_err(|e| format!("写入更新文件失败：{e}"))?;
+            .map_err(|e| trf!("写入更新文件失败：{e}", "Failed to write update file: {e}"))?;
         downloaded += chunk.len() as u64;
         if last_report.elapsed() >= PROGRESS_INTERVAL {
             progress(downloaded, total);
@@ -232,20 +275,21 @@ async fn download_async(
     }
     file.flush()
         .await
-        .map_err(|e| format!("写入更新文件失败：{e}"))?;
+        .map_err(|e| trf!("写入更新文件失败：{e}", "Failed to write update file: {e}"))?;
     drop(file);
 
     if downloaded != total {
         let _ = tokio::fs::remove_file(&part).await;
-        return Err(format!(
-            "下载不完整（期望 {total} 字节，实际 {downloaded} 字节）"
+        return Err(trf!(
+            "下载不完整（期望 {total} 字节，实际 {downloaded} 字节）",
+            "Download incomplete (expected {total} bytes, got {downloaded} bytes)"
         ));
     }
     progress(total, total);
 
     tokio::fs::rename(&part, &target)
         .await
-        .map_err(|e| format!("无法保存更新文件：{e}"))?;
+        .map_err(|e| trf!("无法保存更新文件：{e}", "Cannot save update file: {e}"))?;
 
     if let Err(err) = verify_binary(&target, info) {
         let _ = std::fs::remove_file(&target);
@@ -257,37 +301,54 @@ async fn download_async(
 /// Verifies a downloaded build before it is allowed to replace the running
 /// executable: size, PE identity, and its own `--version` self-check.
 pub fn verify_binary(path: &Path, info: &ReleaseInfo) -> Result<(), String> {
-    let meta = std::fs::metadata(path).map_err(|e| format!("无法读取更新文件：{e}"))?;
+    let meta = std::fs::metadata(path)
+        .map_err(|e| trf!("无法读取更新文件：{e}", "Cannot read update file: {e}"))?;
     if meta.len() != info.asset_size {
-        return Err(format!(
+        return Err(trf!(
             "更新文件大小不一致（期望 {}，实际 {}）",
+            "Update file size mismatch (expected {}, got {})",
             info.asset_size,
             meta.len()
         ));
     }
     if meta.len() < MIN_BINARY_SIZE {
-        return Err("更新文件过小，不是有效的 VoxKey 程序".to_string());
+        return Err(ts!(
+            "更新文件过小，不是有效的 VoxKey 程序",
+            "Update file is too small to be a valid VoxKey build"
+        )
+        .to_string());
     }
 
     let mut head = [0u8; 1024];
     {
         use std::io::Read;
-        let mut file = std::fs::File::open(path).map_err(|e| format!("无法读取更新文件：{e}"))?;
-        let read = file
-            .read(&mut head)
-            .map_err(|e| format!("无法读取更新文件头：{e}"))?;
+        let mut file = std::fs::File::open(path)
+            .map_err(|e| trf!("无法读取更新文件：{e}", "Cannot read update file: {e}"))?;
+        let read = file.read(&mut head).map_err(|e| {
+            trf!(
+                "无法读取更新文件头：{e}",
+                "Cannot read update file header: {e}"
+            )
+        })?;
         if read < 0x40 {
-            return Err("更新文件头不完整".to_string());
+            return Err(ts!("更新文件头不完整", "Update file header is incomplete").to_string());
         }
     }
     match pe_machine(&head) {
         Some(0x8664) => {}
         Some(machine) => {
-            return Err(format!(
-                "更新文件不是 x86-64 程序（PE machine 0x{machine:04X}）"
+            return Err(trf!(
+                "更新文件不是 x86-64 程序（PE machine 0x{machine:04X}）",
+                "Update file is not an x86-64 binary (PE machine 0x{machine:04X})"
             ));
         }
-        None => return Err("更新文件不是有效的 Windows 可执行文件".to_string()),
+        None => {
+            return Err(ts!(
+                "更新文件不是有效的 Windows 可执行文件",
+                "Update file is not a valid Windows executable"
+            )
+            .to_string());
+        }
     }
 
     if let Some(digest) = info
@@ -298,8 +359,9 @@ pub fn verify_binary(path: &Path, info: &ReleaseInfo) -> Result<(), String> {
     {
         let actual = sha256_file(path)?;
         if actual != digest {
-            return Err(format!(
-                "更新文件 SHA-256 校验失败（期望 {digest}，实际 {actual}）"
+            return Err(trf!(
+                "更新文件 SHA-256 校验失败（期望 {digest}，实际 {actual}）",
+                "Update file SHA-256 verification failed (expected {digest}, got {actual})"
             ));
         }
     }
@@ -307,10 +369,16 @@ pub fn verify_binary(path: &Path, info: &ReleaseInfo) -> Result<(), String> {
     let output = std::process::Command::new(path)
         .arg("--version")
         .output()
-        .map_err(|e| format!("无法运行新版本自检：{e}"))?;
+        .map_err(|e| {
+            trf!(
+                "无法运行新版本自检：{e}",
+                "Cannot run the new build's self-check: {e}"
+            )
+        })?;
     if !output.status.success() {
-        return Err(format!(
+        return Err(trf!(
             "新版本自检失败（退出码 {:?}）",
+            "New build self-check failed (exit code {:?})",
             output.status.code()
         ));
     }
@@ -319,10 +387,17 @@ pub fn verify_binary(path: &Path, info: &ReleaseInfo) -> Result<(), String> {
         .split_whitespace()
         .nth(1)
         .and_then(normalize_version)
-        .ok_or_else(|| format!("新版本自检输出异常：{}", reported_version.trim()))?;
+        .ok_or_else(|| {
+            trf!(
+                "新版本自检输出异常：{}",
+                "Unexpected new build self-check output: {}",
+                reported_version.trim()
+            )
+        })?;
     if normalized != info.version {
-        return Err(format!(
+        return Err(trf!(
             "新版本自检版本号不一致（期望 {}，实际 {normalized}）",
+            "New build reports a different version (expected {}, got {normalized})",
             info.version
         ));
     }
@@ -334,18 +409,28 @@ pub fn verify_binary(path: &Path, info: &ReleaseInfo) -> Result<(), String> {
 /// Windows lets a running image be renamed, so no helper process or batch
 /// script is needed. On any failure the original file is restored.
 pub fn install_and_restart(new_exe: &Path) -> Result<(), String> {
-    let current = std::env::current_exe().map_err(|e| format!("无法定位当前程序：{e}"))?;
+    let current = std::env::current_exe().map_err(|e| {
+        trf!(
+            "无法定位当前程序：{e}",
+            "Cannot locate the current program: {e}"
+        )
+    })?;
     let current = std::fs::canonicalize(&current).unwrap_or(current);
-    let parent = current
-        .parent()
-        .ok_or_else(|| "无法定位程序所在目录".to_string())?;
+    let parent = current.parent().ok_or_else(|| {
+        ts!(
+            "无法定位程序所在目录",
+            "Cannot locate the program directory"
+        )
+        .to_string()
+    })?;
 
     let staged = current.with_extension("exe.new");
     let backup = current.with_extension("exe.old");
     let _ = std::fs::remove_file(&staged);
     std::fs::copy(new_exe, &staged).map_err(|e| {
-        format!(
+        trf!(
             "无法写入新版本到 {}（可能没有写权限）：{e}",
+            "Cannot write the new build to {} (write permission may be missing): {e}",
             parent.display()
         )
     })?;
@@ -355,13 +440,19 @@ pub fn install_and_restart(new_exe: &Path) -> Result<(), String> {
     let _ = std::fs::remove_file(&backup);
     std::fs::rename(&current, &backup).map_err(|e| {
         let _ = std::fs::remove_file(&staged);
-        format!("无法替换正在运行的程序：{e}")
+        trf!(
+            "无法替换正在运行的程序：{e}",
+            "Cannot replace the running program: {e}"
+        )
     })?;
 
     if let Err(err) = std::fs::rename(&staged, &current) {
         let _ = std::fs::rename(&backup, &current);
         let _ = std::fs::remove_file(&staged);
-        return Err(format!("无法启用新版本：{err}"));
+        return Err(trf!(
+            "无法启用新版本：{err}",
+            "Cannot activate the new build: {err}"
+        ));
     }
 
     match std::process::Command::new(&current).spawn() {
@@ -369,7 +460,10 @@ pub fn install_and_restart(new_exe: &Path) -> Result<(), String> {
         Err(err) => {
             let _ = std::fs::remove_file(&current);
             let _ = std::fs::rename(&backup, &current);
-            Err(format!("新版本启动失败，已回滚到原版本：{err}"))
+            Err(trf!(
+                "新版本启动失败，已回滚到原版本：{err}",
+                "New build failed to start; rolled back to the previous version: {err}"
+            ))
         }
     }
 }
@@ -442,7 +536,7 @@ pub fn is_newer(remote: &str, current: &str) -> bool {
     }
 }
 
-fn pe_machine(bytes: &[u8]) -> Option<u16> {
+pub(crate) fn pe_machine(bytes: &[u8]) -> Option<u16> {
     if bytes.len() < 0x40 || &bytes[0..2] != b"MZ" {
         return None;
     }
@@ -455,11 +549,16 @@ fn pe_machine(bytes: &[u8]) -> Option<u16> {
 }
 
 /// SHA-256 of a file as lowercase hex. Shares the streaming implementation with
-/// the model verifier (`src/sha256.rs`) so a 40 MB asset is never fully buffered.
+/// the model verifier (`src/sha256.rs`) so a large asset is never fully buffered.
 fn sha256_file(path: &Path) -> Result<String, String> {
     crate::sha256::hash_file(path)
         .map(|digest| crate::sha256::hex(&digest))
-        .map_err(|e| format!("无法读取更新文件以便校验：{e}"))
+        .map_err(|e| {
+            trf!(
+                "无法读取更新文件以便校验：{e}",
+                "Cannot read update file for verification: {e}"
+            )
+        })
 }
 
 #[cfg(test)]

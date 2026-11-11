@@ -6,7 +6,9 @@ mod clipboard;
 mod config;
 mod engine;
 mod events;
+mod fonts;
 mod hotkey;
+mod i18n;
 mod llm;
 mod logging;
 mod model;
@@ -16,6 +18,7 @@ mod secrets;
 mod settings;
 mod sha256;
 mod update;
+mod worker;
 mod zh;
 
 use eframe::egui;
@@ -34,6 +37,8 @@ fn main() {
     }
 
     update::cleanup_stale_files();
+    worker::cleanup_old_versions();
+    logging::info("VoxKey 主线程启动");
 
     let config = config::Config::load();
     let native_options = eframe::NativeOptions {
@@ -71,7 +76,7 @@ fn main() {
     );
 
     if let Err(err) = result {
-        let message = format!("VoxKey 启动失败：{err}");
+        let message = format!("VoxKey 启动失败 / VoxKey failed to start：{err}");
         logging::error(&message);
         show_error(&message);
     }

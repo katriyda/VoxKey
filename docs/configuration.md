@@ -7,6 +7,7 @@
 | 设置文件 | `%APPDATA%\VoxKey\config.json` | `VOXKEY_DATA_DIR` |
 | 模型缓存 | `%LOCALAPPDATA%\VoxKey\models\sensevoice-int8\` | `VOXKEY_MODEL_DIR` |
 | 手动导入目录 | `%LOCALAPPDATA%\VoxKey\models\inbox\` | `VOXKEY_IMPORT_DIR` |
+| 语音引擎 | `%LOCALAPPDATA%\VoxKey\bin\VoxKey-asr-<版本>.exe` | `VOXKEY_ASR_EXE`（只读指向文件） |
 | 错误日志 | `%APPDATA%\VoxKey\voxkey.log` | `VOXKEY_DATA_DIR` |
 
 配置示例（API Key 实际以 `api_key_enc` 密文存储，不会出现明文）：
@@ -14,6 +15,7 @@
 ```json
 {
   "language": "zh-CN",
+  "ui_language": "auto",
   "hotkey": "right_ctrl",
   "llm_enabled": false,
   "api_base_url": "https://api.openai.com/v1",
@@ -21,6 +23,9 @@
   "api_key_enc": "<DPAPI 密文 hex；无密钥时省略此字段>"
 }
 ```
+
+- `language` 是**识别语言**（`zh-CN` / `en` / `zh-TW` / `ja` / `ko`），与界面语言无关。
+- `ui_language` 是**界面语言**：`auto`（有中文字体时中文，否则英文，默认）、`zh`、`en`；在设置窗口改动后立即生效。
 
 - Base URL 可以是 `https://api.openai.com/v1`、`http://localhost:11434`，也可以直接填完整的 `.../chat/completions`。
 - 若端点不需要鉴权，API Key 留空即可；VoxKey 不会发送空的 `Authorization` 头。

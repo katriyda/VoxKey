@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/voxkey-asr"]
+resolver = "3"
+
 [package]
 name = "voxkey"
 version = "0.2.1"
@@ -13,13 +17,15 @@ path = "src/main.rs"
 
 [dependencies]
 cpal = "0.18"
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow"] }
+# No `default_fonts`: the Latin base face and the CJK face are loaded from
+# `C:\Windows\Fonts` at startup (see src/fonts.rs), which keeps ~1.5 MB of
+# bundled font data out of the executable.
+eframe = { version = "0.37", default-features = false, features = ["glow"] }
 egui = "0.37"
 raw-window-handle = "0.6"
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sherpa-onnx = "2.0.1"
 tokio = { version = "1", features = ["rt", "time", "fs", "io-util", "net"] }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
@@ -34,9 +40,15 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# `embed-cjk-font` restores the 16 MB Noto CJK face for builds that must render
+# identically on every machine; the shipped build reads Windows fonts instead.
+[features]
+default = []
+embed-cjk-font = []
+
 [profile.release]
-opt-level = 3
-lto = "thin"
+opt-level = "z"
+lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"

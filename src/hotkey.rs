@@ -1,6 +1,8 @@
 //! Parsing and display for the hold-to-talk shortcut. The actual global hook
 //! lives in `platform`.
 
+use crate::i18n::{trf, ts};
+
 pub const DEFAULT_HOTKEY: &str = "right_ctrl";
 
 pub const MOD_CTRL: u8 = 1 << 0;
@@ -69,7 +71,7 @@ impl HotkeySpec {
 pub fn parse_hotkey(input: &str) -> Result<HotkeySpec, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err("快捷键不能为空".to_string());
+        return Err(ts!("快捷键不能为空", "The hotkey cannot be empty").to_string());
     }
 
     let mut modifiers = 0u8;
@@ -77,24 +79,28 @@ pub fn parse_hotkey(input: &str) -> Result<HotkeySpec, String> {
 
     for token in trimmed.split('+').map(|s| s.trim()) {
         if token.is_empty() {
-            return Err("快捷键格式无效".to_string());
+            return Err(ts!("快捷键格式无效", "Invalid hotkey format").to_string());
         }
         let lower = token.to_ascii_lowercase();
 
         if pending.is_some() {
-            return Err("快捷键只能包含一个主键".to_string());
+            return Err(ts!(
+                "快捷键只能包含一个主键",
+                "A hotkey can contain only one main key"
+            )
+            .to_string());
         }
 
         if let Some(bit) = modifier_bit(&lower) {
             if modifiers & bit != 0 {
-                return Err(format!("修饰键重复: {token}"));
+                return Err(trf!("修饰键重复: {token}", "Duplicate modifier: {token}"));
             }
             modifiers |= bit;
             continue;
         }
 
-        let (trigger, fn_alias) =
-            trigger_code(&lower).ok_or_else(|| format!("不支持的按键: {token}"))?;
+        let (trigger, fn_alias) = trigger_code(&lower)
+            .ok_or_else(|| trf!("不支持的按键: {token}", "Unsupported key: {token}"))?;
         pending = Some(HotkeySpec {
             trigger,
             modifiers,
@@ -103,17 +109,26 @@ pub fn parse_hotkey(input: &str) -> Result<HotkeySpec, String> {
         });
     }
 
-    let mut spec = pending.ok_or_else(|| "快捷键缺少主键".to_string())?;
+    let mut spec = pending
+        .ok_or_else(|| ts!("快捷键缺少主键", "The hotkey is missing a main key").to_string())?;
     if spec.trigger == 0 {
-        return Err("快捷键缺少主键".to_string());
+        return Err(ts!("快捷键缺少主键", "The hotkey is missing a main key").to_string());
     }
     if spec.modifiers & spec.family_mask() != 0 {
-        return Err("这个主键已经属于该修饰键，请换一个组合".to_string());
+        return Err(ts!(
+            "这个主键已经属于该修饰键，请换一个组合",
+            "This key already belongs to that modifier; choose another combination"
+        )
+        .to_string());
     }
     if spec.modifiers == 0
         && ((0x41..=0x5A).contains(&spec.trigger) || (0x30..=0x39).contains(&spec.trigger))
     {
-        return Err("字母或数字作为主键时必须搭配修饰键".to_string());
+        return Err(ts!(
+            "字母或数字作为主键时必须搭配修饰键",
+            "A letter or number used as the main key requires a modifier"
+        )
+        .to_string());
     }
     spec.label = format_label(spec.trigger, spec.modifiers, spec.fn_alias);
     Ok(spec)
@@ -180,13 +195,13 @@ pub fn format_label(trigger: u32, modifiers: u8, fn_alias: bool) -> String {
         }
     }
     let key = match trigger {
-        VK_RCONTROL => Some("右 Ctrl"),
-        VK_LCONTROL => Some("左 Ctrl"),
-        VK_RMENU => Some("右 Alt"),
-        VK_LMENU => Some("左 Alt"),
-        VK_RSHIFT => Some("右 Shift"),
-        VK_LSHIFT => Some("左 Shift"),
-        VK_SPACE => Some("空格"),
+        VK_RCONTROL => Some(ts!("右 Ctrl", "Right Ctrl")),
+        VK_LCONTROL => Some(ts!("左 Ctrl", "Left Ctrl")),
+        VK_RMENU => Some(ts!("右 Alt", "Right Alt")),
+        VK_LMENU => Some(ts!("左 Alt", "Left Alt")),
+        VK_RSHIFT => Some(ts!("右 Shift", "Right Shift")),
+        VK_LSHIFT => Some(ts!("左 Shift", "Left Shift")),
+        VK_SPACE => Some(ts!("空格", "Space")),
         VK_TAB => Some("Tab"),
         VK_CAPITAL => Some("Caps Lock"),
         VK_ESCAPE => Some("Esc"),

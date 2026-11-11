@@ -19,10 +19,16 @@ CI 用 `gh release create --generate-notes` 生成变更列表；发布后用本
 
 ## 校验
 
-- 资产：`VoxKey.exe`
-- 大小：`<bytes>` 字节
-- SHA-256：`<hex>`
+两个资产都要发布，缺一不可：
+
+| 资产 | 说明 | 大小 | SHA-256 |
+| --- | --- | --- | --- |
+| `VoxKey.exe` | UI 本体（不含 ASR 引擎） | `<bytes>` 字节 | `<hex>` |
+| `VoxKey-asr.exe` | SenseVoice 引擎 worker（首次运行自动下载） | `<bytes>` 字节 | `<hex>` |
+
 - 构建：GitHub Actions（`windows-2022`），运行 [#<run-id>](https://github.com/katriyda/VoxKey/actions/runs/<run-id>)
+
+`VoxKey-asr.exe` 的 SHA-256 由 CI 写进 UI 构建（`VOXKEY_ASR_SHA256`），UI 下载后会强制比对，因此两个资产必须来自同一次 CI 运行。
 
 下载后自行核对：
 
@@ -33,7 +39,7 @@ Get-FileHash .\VoxKey.exe -Algorithm SHA256
 
 ## 安装与升级
 
-- 单文件绿色程序，直接替换旧的 `VoxKey.exe` 即可，无需安装。
+- UI 本体仍是单个绿色 exe，直接替换旧的 `VoxKey.exe` 即可，无需安装；SenseVoice 引擎（`VoxKey-asr.exe`）由程序在首次运行时下载，版本号为文件名的一部分，升级时自动换新并清理旧文件。
 - 0.2.0 及以后版本可在托盘 → “检查更新…”或设置窗口的“更新”区块内自动升级。
 - 应用内更新要求程序所在目录对当前用户可写；放在 `Program Files` 或以管理员身份运行时会提示失败，不会半安装。
 

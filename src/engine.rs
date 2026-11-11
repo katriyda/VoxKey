@@ -1,20 +1,27 @@
-//! Background recording, local SenseVoice recognition, optional refinement and
-//! text injection. Everything that can block lives here; the egui thread only
-//! receives small state updates.
+//! Background recording, local SenseVoice recognition (delegated to the
+//! `VoxKey-asr` worker process), optional refinement and text injection.
+//! Everything that can block lives here; the egui thread only receives small
+//! state updates.
+//!
+//! The worker is what keeps `VoxKey.exe` small: it owns sherpa-onnx and the
+//! statically linked onnxruntime, is downloaded next to the model on first use,
+//! and is fed 16 kHz mono audio over a pipe. Recognition quality is unchanged,
+//! because it is the same model and the same decoding code as before.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-
-use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineSenseVoiceModelConfig};
 
 use crate::audio::{Recorder, resample_linear};
 use crate::clipboard;
 use crate::config::Language;
 use crate::events::{EngineEvent, UiEvent};
+use crate::i18n::{trf, ts};
 use crate::llm::{self, RefineConfig};
-use crate::{model, zh};
+use crate::{model, worker, zh};
+
+use crate::worker::Worker;
 
 const TARGET_RATE: u32 = 16_000;
 const MAX_RECORDING_SECONDS: u64 = 60;
@@ -46,8 +53,8 @@ impl EngineHandle {
         let _ = self.tx.send(EngineCommand::Stop);
     }
 
-    /// Re-runs model preparation (download, import, verification) and reloads
-    /// the recognizer without restarting the process.
+    /// Re-runs engine and model preparation (download, import, verification)
+    /// without restarting the process.
     pub fn reload_model(&self) {
         let _ = self.tx.send(EngineCommand::ReloadModel);
     }
@@ -66,7 +73,12 @@ pub fn spawn(
     let join = std::thread::Builder::new()
         .name("voxkey-engine".to_string())
         .spawn(move || run_engine(initial_language, rx, ui_tx, ctx))
-        .map_err(|e| format!("无法启动语音线程: {e}"))?;
+        .map_err(|e| {
+            trf!(
+                "无法启动语音线程: {e}",
+                "Cannot start the speech thread: {e}"
+            )
+        })?;
     Ok(EngineHandle {
         tx,
         _join: Some(join),
@@ -84,11 +96,6 @@ fn emit(tx: &Sender<UiEvent>, ctx: &egui::Context, event: EngineEvent) {
     ctx.request_repaint();
 }
 
-struct Backend {
-    recognizer: OfflineRecognizer,
-    language: Language,
-}
-
 struct Session {
     recorder: Option<Recorder>,
     language: Language,
@@ -99,9 +106,11 @@ struct Session {
 }
 
 struct RuntimeState {
-    backend: Option<Backend>,
+    worker: Option<Worker>,
+    worker_exe: Option<PathBuf>,
     model_dir: Option<PathBuf>,
-    backend_error: Option<String>,
+    loaded_language: Option<Language>,
+    engine_error: Option<String>,
 }
 
 fn run_engine(
@@ -119,20 +128,25 @@ fn run_engine(
             emit(
                 &tx,
                 &ctx,
-                EngineEvent::Error(format!("无法创建网络运行时: {e}")),
+                EngineEvent::Error(trf!(
+                    "无法创建网络运行时: {e}",
+                    "Cannot create the network runtime: {e}"
+                )),
             );
             return;
         }
     };
 
     let mut state = RuntimeState {
-        backend: None,
+        worker: None,
+        worker_exe: None,
         model_dir: None,
-        backend_error: None,
+        loaded_language: None,
+        engine_error: None,
     };
 
     if let Err(err) = prepare_model(&mut state, &runtime, initial_language, &tx, &ctx) {
-        state.backend_error = Some(err.clone());
+        state.engine_error = Some(err.clone());
         emit(&tx, &ctx, EngineEvent::ModelError(err));
     }
 
@@ -148,13 +162,9 @@ fn run_engine(
                     }
                 }
                 Ok(EngineCommand::ReloadModel) => {
-                    let language = state
-                        .backend
-                        .as_ref()
-                        .map(|backend| backend.language)
-                        .unwrap_or(initial_language);
+                    let language = state.loaded_language.unwrap_or(initial_language);
                     if let Err(err) = prepare_model(&mut state, &runtime, language, &tx, &ctx) {
-                        state.backend_error = Some(err.clone());
+                        state.engine_error = Some(err.clone());
                         emit(&tx, &ctx, EngineEvent::ModelError(err));
                     }
                 }
@@ -220,10 +230,7 @@ fn run_engine(
             if new_samples > sample_rate as usize / 4 && rms(&samples) >= MIN_VOICE_RMS {
                 current.last_partial_samples = samples.len();
                 if duration_seconds(samples.len(), sample_rate) >= 0.8 {
-                    let Some(backend) = state.backend.as_ref() else {
-                        continue;
-                    };
-                    match decode_samples(backend, &samples, sample_rate, current.language) {
+                    match transcribe(&mut state, &samples, sample_rate, current.language) {
                         Ok(text) if has_meaningful_text(&text) => {
                             emit(&tx, &ctx, EngineEvent::Transcript(text));
                         }
@@ -248,7 +255,13 @@ fn run_engine(
             emit(
                 &tx,
                 &ctx,
-                EngineEvent::Status("已达到 60 秒上限，正在识别…".to_string()),
+                EngineEvent::Status(
+                    ts!(
+                        "已达到 60 秒上限，正在识别…",
+                        "60 second limit reached, recognizing…",
+                    )
+                    .to_string(),
+                ),
             );
             stop_requested = true;
         }
@@ -273,9 +286,9 @@ fn run_engine(
     }
 }
 
-/// Prepares (downloads/imports/loads) the model and reports progress through
-/// `EngineEvent`. `ModelError` is emitted by the caller so every failure path
-/// ends up in the same UI state.
+/// Prepares the worker binary and the model, then loads the recognizer.
+/// `ModelError` is emitted by the caller so every failure path ends up in the
+/// same UI state.
 fn prepare_model(
     state: &mut RuntimeState,
     runtime: &tokio::runtime::Runtime,
@@ -286,36 +299,60 @@ fn prepare_model(
     emit(
         tx,
         ctx,
-        EngineEvent::Status("正在准备本地语音模型…".to_string()),
+        EngineEvent::Status(
+            ts!(
+                "正在准备本地语音引擎…",
+                "Preparing the local speech engine…",
+            )
+            .to_string(),
+        ),
     );
 
-    let dir = {
-        let mut progress = |downloaded: u64, total: u64, label: &str| {
-            emit(
-                tx,
-                ctx,
-                EngineEvent::Download {
-                    downloaded,
-                    total,
-                    label: label.to_string(),
-                },
-            );
-        };
-        model::ensure_model(runtime, &mut progress)?
+    let mut progress = |downloaded: u64, total: u64, label: &str| {
+        emit(
+            tx,
+            ctx,
+            EngineEvent::Download {
+                downloaded,
+                total,
+                label: label.to_string(),
+            },
+        );
     };
+
+    let exe = worker::ensure(runtime, &mut progress).map_err(|err| {
+        trf!(
+            "语音引擎不可用：{err}",
+            "The speech engine is unavailable: {err}"
+        )
+    })?;
+    state.worker_exe = Some(exe.clone());
+
+    emit(
+        tx,
+        ctx,
+        EngineEvent::Status(
+            ts!("正在准备本地语音模型…", "Preparing the local speech model…",).to_string(),
+        ),
+    );
+    let dir = model::ensure_model(runtime, &mut progress)?;
 
     // Once the files are on disk the overlay must stop looking like a stalled
     // download, even while the recognizer is still loading.
     emit(
         tx,
         ctx,
-        EngineEvent::Status("正在加载语音模型…".to_string()),
+        EngineEvent::Status(ts!("正在加载语音模型…", "Loading the speech model…").to_string()),
     );
 
-    let backend = load_backend(&dir, language).map_err(|err| format!("语音模型加载失败：{err}"))?;
+    state.worker = None;
+    let mut engine = Worker::spawn(&exe)?;
+    engine.load(&dir, language.asr_code())?;
+
+    state.worker = Some(engine);
+    state.loaded_language = Some(language);
     state.model_dir = Some(dir);
-    state.backend = Some(backend);
-    state.backend_error = None;
+    state.engine_error = None;
     emit(tx, ctx, EngineEvent::Ready);
     Ok(())
 }
@@ -327,43 +364,55 @@ fn start_session(
     tx: &Sender<UiEvent>,
     ctx: &egui::Context,
 ) -> Result<Session, String> {
-    let Some(dir) = state.model_dir.as_ref() else {
-        return Err(state
-            .backend_error
-            .clone()
-            .unwrap_or_else(|| "语音模型尚未就绪，请重启应用后重试".to_string()));
-    };
-
-    if state.backend.is_none() {
-        match load_backend(dir, language) {
-            Ok(backend) => {
-                state.backend = Some(backend);
-                emit(tx, ctx, EngineEvent::Ready);
-            }
-            Err(err) => {
-                state.backend_error = Some(err.clone());
-                return Err(err);
-            }
-        }
+    if state.model_dir.is_none() {
+        return Err(state.engine_error.clone().unwrap_or_else(|| {
+            ts!(
+                "语音引擎尚未就绪，请重启应用后重试",
+                "The speech engine is not ready yet; restart VoxKey and try again",
+            )
+            .to_string()
+        }));
     }
 
-    if state
-        .backend
-        .as_ref()
-        .map(|backend| backend.language != language)
-        .unwrap_or(true)
-    {
+    // A crashed or killed worker is transparently restarted on the next press.
+    let dead = match state.worker.as_mut() {
+        Some(worker) => !worker.is_alive(),
+        None => true,
+    };
+    if dead {
         emit(
             tx,
             ctx,
-            EngineEvent::Status(format!("正在加载{}模型…", language.label())),
+            EngineEvent::Status(ts!("正在加载语音模型…", "Loading the speech model…").to_string()),
         );
-        let backend = load_backend(dir, language)?;
-        state.backend = Some(backend);
+        restart_worker(state, language, tx, ctx)?;
+    } else if state.loaded_language != Some(language) {
+        emit(
+            tx,
+            ctx,
+            EngineEvent::Status(
+                trf!("正在加载{}模型…", "Loading the {} model…", language.label()).to_string(),
+            ),
+        );
+        let dir = state
+            .model_dir
+            .clone()
+            .ok_or_else(|| "语音模型未就绪".to_string())?;
+        let worker = state
+            .worker
+            .as_mut()
+            .ok_or_else(|| "语音引擎未运行".to_string())?;
+        worker.load(&dir, language.asr_code())?;
+        state.loaded_language = Some(language);
     }
 
-    emit(tx, ctx, EngineEvent::Status("正在聆听…".to_string()));
-    let recorder = Recorder::start().map_err(|e| format!("麦克风不可用: {e}"))?;
+    emit(
+        tx,
+        ctx,
+        EngineEvent::Status(ts!("正在聆听…", "Listening…").to_string()),
+    );
+    let recorder = Recorder::start()
+        .map_err(|e| trf!("麦克风不可用: {e}", "The microphone is unavailable: {e}"))?;
     emit(tx, ctx, EngineEvent::RecordingStarted);
 
     let now = Instant::now();
@@ -377,6 +426,29 @@ fn start_session(
     })
 }
 
+fn restart_worker(
+    state: &mut RuntimeState,
+    language: Language,
+    tx: &Sender<UiEvent>,
+    ctx: &egui::Context,
+) -> Result<(), String> {
+    let exe = state
+        .worker_exe
+        .clone()
+        .ok_or_else(|| "语音引擎尚未安装".to_string())?;
+    let dir = state
+        .model_dir
+        .clone()
+        .ok_or_else(|| "语音模型未就绪".to_string())?;
+    state.worker = None;
+    let mut engine = Worker::spawn(&exe)?;
+    engine.load(&dir, language.asr_code())?;
+    state.worker = Some(engine);
+    state.loaded_language = Some(language);
+    emit(tx, ctx, EngineEvent::Ready);
+    Ok(())
+}
+
 fn finish_session(
     runtime: &tokio::runtime::Runtime,
     mut session: Session,
@@ -387,35 +459,51 @@ fn finish_session(
     let recorder = session
         .recorder
         .take()
-        .ok_or_else(|| "录音状态异常".to_string())?;
+        .ok_or_else(|| ts!("录音状态异常", "Recorder state is invalid").to_string())?;
     let (samples, sample_rate, audio_error) = recorder.stop();
     if let Some(err) = audio_error {
         eprintln!("VoxKey: audio error while recording: {err}");
     }
 
     if duration_seconds(samples.len(), sample_rate) < MIN_RECORDING_SECONDS {
-        return Err("没有检测到语音，请按住快捷键说话".to_string());
+        return Err(ts!(
+            "没有检测到语音，请按住快捷键说话",
+            "No speech detected; hold the hotkey and speak",
+        )
+        .to_string());
     }
 
     // SenseVoice will happily "recognize" room noise as a character or
     // punctuation mark. Require some real acoustic energy before trusting it.
     if rms(&samples) < MIN_VOICE_RMS {
-        return Err("没有检测到语音，请按住快捷键说话".to_string());
+        return Err(ts!(
+            "没有检测到语音，请按住快捷键说话",
+            "No speech detected; hold the hotkey and speak",
+        )
+        .to_string());
     }
 
-    let Some(backend) = state.backend.as_ref() else {
-        return Err("语音模型未就绪".to_string());
-    };
+    if state.worker.is_none() {
+        return Err(ts!("语音模型未就绪", "The speech model is not ready").to_string());
+    }
 
     emit(tx, ctx, EngineEvent::Recognizing);
-    let mut text = decode_samples(backend, &samples, sample_rate, session.language)?;
+    let mut text = transcribe(state, &samples, sample_rate, session.language)?;
     if !has_meaningful_text(&text) {
-        return Err("没有识别出文字，请再试一次".to_string());
+        return Err(ts!(
+            "没有识别出文字，请再试一次",
+            "No text was recognized; please try again",
+        )
+        .to_string());
     }
     // A single character decoded from a faint recording is almost always
     // noise; ask for a clearer retry instead of inserting garbage.
     if meaningful_char_count(&text) <= 1 && rms(&samples) < SOFT_SINGLE_CHAR_RMS {
-        return Err("没有识别出文字，请再试一次".to_string());
+        return Err(ts!(
+            "没有识别出文字，请再试一次",
+            "No text was recognized; please try again",
+        )
+        .to_string());
     }
 
     let mut warnings = Vec::new();
@@ -426,16 +514,27 @@ fn finish_session(
                 text = postprocess(session.language, &refined);
             }
             Err(err) => {
-                warnings.push(format!("LLM 纠错已跳过：{err}"));
+                warnings.push(trf!(
+                    "LLM 纠错已跳过：{err}",
+                    "LLM refinement was skipped: {err}"
+                ));
             }
         }
     }
 
     if !has_meaningful_text(&text) {
-        return Err("纠错后的文本为空，已取消插入".to_string());
+        return Err(ts!(
+            "纠错后的文本为空，已取消插入",
+            "The refined text was empty, so nothing was inserted",
+        )
+        .to_string());
     }
 
-    emit(tx, ctx, EngineEvent::Status("正在插入文字…".to_string()));
+    emit(
+        tx,
+        ctx,
+        EngineEvent::Status(ts!("正在插入文字…", "Inserting text…").to_string()),
+    );
     match clipboard::inject_text(&text) {
         Ok(restore_warning) => {
             if let Some(warning) = restore_warning {
@@ -455,24 +554,30 @@ fn finish_session(
             );
             Ok(())
         }
-        Err(err) => Err(format!("无法插入文字：{err}")),
+        Err(err) => Err(trf!("无法插入文字：{err}", "Cannot insert the text: {err}")),
     }
 }
 
-fn decode_samples(
-    backend: &Backend,
+fn transcribe(
+    state: &mut RuntimeState,
     samples: &[f32],
     sample_rate: u32,
     language: Language,
 ) -> Result<String, String> {
     let audio = resample_linear(samples, sample_rate, TARGET_RATE);
-    let stream = backend.recognizer.create_stream();
-    stream.accept_waveform(TARGET_RATE as i32, &audio);
-    backend.recognizer.decode(&stream);
-    let raw = stream
-        .get_result()
-        .ok_or_else(|| "识别器没有返回结果".to_string())?
-        .text;
+    let worker = state
+        .worker
+        .as_mut()
+        .ok_or_else(|| ts!("语音引擎未运行", "The speech engine is not running").to_string())?;
+    let raw = match worker.transcribe(&audio) {
+        Ok(raw) => raw,
+        Err(err) => {
+            // The pipe is broken: drop the child so the next press restarts it.
+            state.worker = None;
+            state.loaded_language = None;
+            return Err(err);
+        }
+    };
     Ok(postprocess(language, &raw))
 }
 
@@ -515,35 +620,6 @@ fn strip_sense_voice_tags(raw: &str) -> String {
     }
     result.push_str(rest);
     result
-}
-
-fn load_backend(dir: &Path, language: Language) -> Result<Backend, String> {
-    let model = dir.join("model.int8.onnx");
-    let tokens = dir.join("tokens.txt");
-    if !model.is_file() || !tokens.is_file() {
-        return Err(format!("模型文件缺失，请删除缓存后重启：{}", dir.display()));
-    }
-
-    let mut config = OfflineRecognizerConfig::default();
-    config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
-        model: Some(model.to_string_lossy().into_owned()),
-        language: Some(language.asr_code().to_string()),
-        use_itn: true,
-    };
-    config.model_config.tokens = Some(tokens.to_string_lossy().into_owned());
-    config.model_config.provider = Some("cpu".to_string());
-    config.model_config.num_threads = std::thread::available_parallelism()
-        .map(|count| count.get().min(4) as i32)
-        .unwrap_or(2)
-        .max(1);
-
-    let recognizer = OfflineRecognizer::create(&config)
-        .ok_or_else(|| "无法初始化 SenseVoice 识别器（模型文件可能损坏）".to_string())?;
-
-    Ok(Backend {
-        recognizer,
-        language,
-    })
 }
 
 fn duration_seconds(samples: usize, sample_rate: u32) -> f32 {
@@ -598,6 +674,5 @@ mod tests {
         assert!((rms(&vec![0.1; 1000]) - 0.1).abs() < 1e-5);
         assert_eq!(meaningful_char_count("。"), 0);
         assert_eq!(meaningful_char_count("我。"), 1);
-        assert_eq!(meaningful_char_count("你好"), 2);
     }
 }
