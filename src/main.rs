@@ -38,13 +38,20 @@ fn main() {
 
     update::cleanup_stale_files();
     worker::cleanup_old_versions();
-    logging::info("VoxKey 主线程启动");
 
     let config = config::Config::load();
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("VoxKey Overlay")
             .with_inner_size([360.0, overlay::WINDOW_HEIGHT])
+            // Opt out of eframe's default icon (documented behaviour: an all
+            // zero `IconData` disables it). eframe otherwise injects its own
+            // logo into the title bar and taskbar button of whichever window is
+            // active, so the settings window ended up showing the egui icon
+            // instead of VoxKey's. `platform::apply_window_icon` installs the
+            // real icon from `assets/voxkey.ico` on every window, including the
+            // settings viewport and the shared window class.
+            .with_icon(egui::IconData::default())
             .with_resizable(false)
             .with_decorations(false)
             .with_transparent(true)

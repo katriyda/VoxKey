@@ -340,7 +340,6 @@ fn run_tray(
     unsafe {
         thread_id.store(GetCurrentThreadId(), Ordering::Release);
     }
-    crate::logging::info("托盘线程已启动");
 
     let module = match unsafe { GetModuleHandleW(None) } {
         Ok(module) => module,
@@ -359,10 +358,6 @@ fn run_tray(
     let hinstance = HINSTANCE::from(module);
 
     let (mut icon, mut owns_icon) = create_tray_icon(icon_bytes);
-    crate::logging::info(&format!(
-        "托盘图标创建完成: hicon={:?} owned={owns_icon}",
-        icon.0
-    ));
     let class_name = wide(TRAY_CLASS);
     let title = wide(TRAY_WINDOW_TITLE);
     let cursor = unsafe { LoadCursorW(None, IDC_ARROW).unwrap_or_default() };
@@ -382,8 +377,6 @@ fn run_tray(
 
     let atom = unsafe { RegisterClassW(&wndclass) };
     if atom == 0 {
-        let error = unsafe { GetLastError() }.0;
-        crate::logging::error(&format!("托盘窗口类注册失败（Win32 {error}）"));
         send_ui(
             &tx,
             &ctx,
@@ -421,7 +414,6 @@ fn run_tray(
     } {
         Ok(hwnd) => hwnd,
         Err(e) => {
-            crate::logging::error(&format!("托盘窗口创建失败: {e}"));
             send_ui(
                 &tx,
                 &ctx,
@@ -458,7 +450,6 @@ fn run_tray(
 
     if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
         let first_error = unsafe { GetLastError() }.0;
-        crate::logging::error(&format!("托盘图标 NIM_ADD 失败（Win32 {first_error}）"));
         // The embedded .ico is a nice-to-have; never let icon parsing prevent
         // the tray from working. Retry once with the stock application icon.
         if owns_icon {
@@ -471,9 +462,6 @@ fn run_tray(
         nid.hIcon = icon;
         if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
             let second_error = unsafe { GetLastError() }.0;
-            crate::logging::error(&format!(
-                "托盘图标使用默认图标重试仍失败（Win32 {second_error}）"
-            ));
             send_ui(
                 &tx,
                 &ctx,
@@ -494,7 +482,6 @@ fn run_tray(
         state,
     });
     let _ = TRAY_RUNTIME.set(Arc::clone(&runtime));
-    crate::logging::info("托盘图标已添加，托盘消息循环开始");
 
     let mut message = MSG::default();
     loop {
@@ -826,6 +813,10 @@ fn window_icons() -> (isize, isize) {
 
 /// Loads a window icon at `size` from the executable's resources, falling back
 /// to the embedded `.ico` when the resource block is absent.
+#[allow(
+    clippy::manual_dangling_ptr,
+    reason = "MAKEINTRESOURCE: the pointer value is the resource id, not an address"
+)]
 fn load_window_icon(size: i32) -> isize {
     let size = if size > 0 { size } else { 32 };
     unsafe {
