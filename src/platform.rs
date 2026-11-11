@@ -10,6 +10,10 @@ use std::thread::JoinHandle;
 use windows::Win32::Foundation::{
     GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
+use windows::Win32::Graphics::Dwm::{
+    DWMNCRENDERINGPOLICY, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+    DWMWA_NCRENDERING_POLICY, DwmSetWindowAttribute,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
@@ -28,7 +32,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SetClassLongPtrW,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW,
     TRACK_POPUP_MENU_FLAGS, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCHITTEST,
+    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
+    WM_NCCALCSIZE, WM_NCHITTEST,
     WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SETICON, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC,
     WS_CAPTION, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
     WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
@@ -914,12 +919,21 @@ static PREVIOUS_OVERLAY_PROC: std::sync::atomic::AtomicIsize =
 /// keeps receiving clicks. A `WS_EX_LAYERED` + `WS_EX_TRANSPARENT` pair would
 /// do the same, but winit sets `WS_EX_LAYERED` without layered attributes,
 /// which stops the capsule from being composited on screen at all.
+///
+/// It also claims the whole window as client area (`WM_NCCALCSIZE`): Windows 11
+/// reserves a one pixel non-client strip along the top of the frame and paints
+/// it in the system frame colour, which is white in the light theme. On a
+/// transparent overlay that strip is the white hairline floating above the
+/// capsule.
 unsafe extern "system" fn overlay_window_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if msg == WM_NCCALCSIZE && wparam.0 != 0 {
+        return LRESULT(0);
+    }
     if msg == WM_NCHITTEST {
         return LRESULT(HTTRANSPARENT as isize);
     }
@@ -987,6 +1001,27 @@ pub fn configure_overlay_window(hwnd: HWND) {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
             );
         }
+
+        // Windows 11 still draws a one pixel frame border around the window: the
+        // system frame colour (white in the light theme) along the top edge. Even
+        // with `WM_NCCALCSIZE` claiming the whole window, DWM keeps painting that
+        // hairline on top of the transparent capsule, so ask it for no frame at
+        // all. Both calls are no-ops (E_INVALIDARG) on Windows versions that do
+        // not know the attributes, hence the ignored results.
+        let nc_policy = DWMNCRP_DISABLED;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &nc_policy as *const DWMNCRENDERINGPOLICY as *const c_void,
+            size_of::<DWMNCRENDERINGPOLICY>() as u32,
+        );
+        let border = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border as *const u32 as *const c_void,
+            size_of::<u32>() as u32,
+        );
     }
 
     // The overlay is borderless and taskbar-less, but the class icons set here

@@ -4,7 +4,7 @@ resolver = "3"
 
 [package]
 name = "voxkey"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.95"
 description = "Hold-to-talk, local-first voice input for Windows"
@@ -29,6 +29,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "time", "fs", "io-util", "net"] }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Security_Cryptography",
     "Win32_System_DataExchange",
