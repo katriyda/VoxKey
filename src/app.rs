@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -6,12 +7,15 @@ use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Pos2, Vec2};
 
 use crate::config::Config;
 use crate::engine::{self, EngineHandle};
-use crate::events::{EngineEvent, TrayAction, UiEvent};
+use crate::events::{EngineEvent, TrayAction, UiEvent, UpdateEvent};
 use crate::hotkey::parse_hotkey;
 use crate::llm;
+use crate::logging;
+use crate::model::{self, ImportOutcome};
 use crate::overlay::{Overlay, OverlayKind, WINDOW_HEIGHT};
 use crate::platform::{self, Platform, TrayState};
 use crate::settings::{self, SettingsAction, SettingsState};
+use crate::update::{self, UpdateUiState};
 
 const SETTINGS_VIEWPORT_NAME: &str = "voxkey-settings";
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../assets/voxkey.ico");
@@ -37,6 +41,10 @@ pub struct VoxKeyApp {
     show_settings: bool,
     focus_settings: bool,
     settings: SettingsState,
+    update: UpdateUiState,
+    importing_model: bool,
+    download_sample: Option<(Instant, u64)>,
+    download_rate: f32,
     last_frame: Instant,
     exiting: bool,
 }
@@ -88,6 +96,10 @@ impl VoxKeyApp {
             show_settings: false,
             focus_settings: false,
             settings: SettingsState::from_config(&Config::default()),
+            update: UpdateUiState::default(),
+            importing_model: false,
+            download_sample: None,
+            download_rate: 0.0,
             last_frame: Instant::now(),
             exiting: false,
         })
@@ -107,6 +119,8 @@ impl VoxKeyApp {
                         Err(err) => (false, format!("测试失败：{err}")),
                     });
                 }
+                UiEvent::Update(event) => self.on_update_event(ctx, event),
+                UiEvent::ModelImportDone(result) => self.on_model_import(ctx, result),
                 UiEvent::PlatformError(err) => {
                     crate::logging::error(&err);
                     self.overlay.present(
@@ -166,14 +180,24 @@ impl VoxKeyApp {
 
     fn on_tray_action(&mut self, ctx: &egui::Context, action: TrayAction) {
         match action {
-            TrayAction::OpenSettings => {
-                if !self.show_settings {
-                    self.settings.reset_from(&self.config);
-                    self.show_settings = true;
-                }
-                self.focus_settings = true;
-                ctx.request_repaint();
+            TrayAction::OpenSettings => self.open_settings(ctx),
+            TrayAction::CheckUpdate => {
+                self.open_settings(ctx);
+                self.start_update_check();
             }
+            TrayAction::ImportModel => self.start_model_import(),
+            TrayAction::OpenModelDir => {
+                let dir = model::model_dir();
+                let path = dir.display().to_string();
+                platform::open_url(&path);
+                self.overlay.present(
+                    OverlayKind::Success,
+                    "已打开模型目录",
+                    path,
+                    Some(Duration::from_secs(4)),
+                );
+            }
+            TrayAction::ReloadModel => self.reload_model(),
             TrayAction::ToggleLlm => {
                 self.config.llm_enabled = !self.config.llm_enabled;
                 self.apply_tray_state();
@@ -204,6 +228,250 @@ impl VoxKeyApp {
         }
     }
 
+    fn open_settings(&mut self, ctx: &egui::Context) {
+        if !self.show_settings {
+            self.settings.reset_from(&self.config);
+            self.show_settings = true;
+        }
+        self.focus_settings = true;
+        ctx.request_repaint();
+    }
+
+    fn start_update_check(&mut self) {
+        if self.update.checking || self.update.downloading {
+            return;
+        }
+        self.update.checking = true;
+        self.update.info = None;
+        self.update.progress = None;
+        self.update.message = None;
+
+        let tx = self.ui_tx.clone();
+        let ctx = self.ctx.clone();
+        let spawn = std::thread::Builder::new()
+            .name("voxkey-update-check".to_string())
+            .spawn(move || {
+                let result = update::check_blocking();
+                let _ = tx.send(UiEvent::Update(UpdateEvent::CheckFinished(result)));
+                ctx.request_repaint();
+            });
+        if let Err(err) = spawn {
+            self.update.checking = false;
+            self.update.message = Some((false, format!("无法启动更新检查：{err}")));
+        }
+    }
+
+    fn start_update_download(&mut self) {
+        let Some(info) = self.update.info.clone() else {
+            return;
+        };
+        if self.update.downloading {
+            return;
+        }
+        self.update.downloading = true;
+        self.update.progress = Some((0, info.asset_size));
+        self.update.message = None;
+        self.ctx.request_repaint();
+
+        let tx = self.ui_tx.clone();
+        let ctx = self.ctx.clone();
+        let spawn = std::thread::Builder::new()
+            .name("voxkey-update-download".to_string())
+            .spawn(move || {
+                let mut report = |downloaded: u64, total: u64| {
+                    let _ = tx.send(UiEvent::Update(UpdateEvent::Progress { downloaded, total }));
+                    ctx.request_repaint();
+                };
+                let event = match update::download_blocking(&info, &mut report) {
+                    Ok(path) => UpdateEvent::Downloaded(path),
+                    Err(err) => UpdateEvent::Failed(err),
+                };
+                let _ = tx.send(UiEvent::Update(event));
+                ctx.request_repaint();
+            });
+        if let Err(err) = spawn {
+            self.update.downloading = false;
+            self.update.progress = None;
+            self.update.message = Some((false, format!("无法启动更新下载：{err}")));
+        }
+    }
+
+    fn on_update_event(&mut self, ctx: &egui::Context, event: UpdateEvent) {
+        match event {
+            UpdateEvent::CheckFinished(Ok(None)) => {
+                self.update.checking = false;
+                self.update.info = None;
+                self.update.message =
+                    Some((true, format!("已是最新版本 v{}", update::current_version())));
+            }
+            UpdateEvent::CheckFinished(Ok(Some(info))) => {
+                self.update.checking = false;
+                self.update.message = None;
+                self.update.info = Some(info);
+            }
+            UpdateEvent::CheckFinished(Err(err)) => {
+                self.update.checking = false;
+                self.update.message = Some((false, format!("检查更新失败：{err}")));
+            }
+            UpdateEvent::Progress { downloaded, total } => {
+                self.update.progress = Some((downloaded, total));
+            }
+            UpdateEvent::Downloaded(path) => {
+                self.update.downloading = false;
+                self.update.progress = None;
+                self.apply_update(ctx, &path);
+            }
+            UpdateEvent::Failed(err) => {
+                self.update.downloading = false;
+                self.update.progress = None;
+                self.update.message = Some((false, format!("下载更新失败：{err}")));
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn apply_update(&mut self, ctx: &egui::Context, path: &Path) {
+        match update::install_and_restart(path) {
+            Ok(()) => {
+                crate::logging::info("已启动新版本，准备退出旧进程");
+                self.update.message = Some((true, "新版本已启动，VoxKey 即将重启…".to_string()));
+                self.request_quit(ctx);
+            }
+            Err(err) => {
+                self.update.message = Some((false, format!("安装更新失败：{err}")));
+            }
+        }
+    }
+
+    /// Smooths download speed for the overlay so users can tell a slow transfer
+    /// from a stalled one.
+    fn track_download_rate(&mut self, downloaded: u64) -> f32 {
+        let now = Instant::now();
+        let (rate, sample) = match self.download_sample {
+            Some((_, bytes)) if downloaded < bytes => (0.0f32, (now, downloaded)),
+            Some((at, bytes)) => {
+                let elapsed = now.duration_since(at).as_secs_f32();
+                if elapsed < 0.2 {
+                    (self.download_rate, (at, bytes))
+                } else {
+                    let instant = (downloaded - bytes) as f32 / 1_000_000.0 / elapsed;
+                    let smoothed = if self.download_rate <= 0.05 {
+                        instant
+                    } else {
+                        self.download_rate * 0.6 + instant * 0.4
+                    };
+                    (smoothed, (now, downloaded))
+                }
+            }
+            None => (0.0f32, (now, downloaded)),
+        };
+        self.download_sample = Some(sample);
+        self.download_rate = rate;
+        rate
+    }
+
+    /// Re-runs model preparation inside the engine thread (after an import, a
+    /// failed download or a manual file change).
+    fn reload_model(&mut self) {
+        self.engine_ready = false;
+        self.download_sample = None;
+        self.download_rate = 0.0;
+        self.overlay.present(
+            OverlayKind::Download,
+            "正在准备本地语音模型",
+            "重新检查模型文件…",
+            None,
+        );
+        self.engine.reload_model();
+    }
+
+    /// Runs the offline import on its own thread: hashing 239 MB must not block
+    /// the UI thread that also drives the hotkey hook.
+    fn start_model_import(&mut self) {
+        if self.importing_model {
+            return;
+        }
+        self.importing_model = true;
+        self.overlay.present(
+            OverlayKind::Download,
+            "正在导入本地模型",
+            "校验文件大小与 SHA-256…",
+            None,
+        );
+        self.settings.model_message = None;
+
+        let tx = self.ui_tx.clone();
+        let ctx = self.ctx.clone();
+        let spawn = std::thread::Builder::new()
+            .name("voxkey-model-import".to_string())
+            .spawn(move || {
+                let mut report = |downloaded: u64, total: u64, label: &str| {
+                    let _ = tx.send(UiEvent::Engine(EngineEvent::Download {
+                        downloaded,
+                        total,
+                        label: label.to_string(),
+                    }));
+                    ctx.request_repaint();
+                };
+                let result = model::import_from_inbox(&mut report);
+                let _ = tx.send(UiEvent::ModelImportDone(result));
+                ctx.request_repaint();
+            });
+        if let Err(err) = spawn {
+            self.importing_model = false;
+            self.settings.model_message = Some((false, format!("无法启动导入线程：{err}")));
+        }
+    }
+
+    fn on_model_import(&mut self, ctx: &egui::Context, result: Result<ImportOutcome, String>) {
+        self.importing_model = false;
+        match result {
+            Ok(ImportOutcome::Imported { message }) => {
+                logging::info(&format!("离线模型导入完成：{message}"));
+                self.settings.model_message = Some((true, message));
+                self.engine_ready = false;
+                self.download_sample = None;
+                self.download_rate = 0.0;
+                self.overlay.present(
+                    OverlayKind::Download,
+                    "正在加载语音模型",
+                    "本地模型已导入，正在加载…",
+                    None,
+                );
+                self.engine.reload_model();
+            }
+            Ok(ImportOutcome::Empty { dir }) => {
+                let path = dir.display().to_string();
+                platform::open_url(&path);
+                let message = format!(
+                    "已打开导入目录 {}。把 {} 与 {} 放进去，再从托盘选择“导入本地模型”。",
+                    path,
+                    model::MODEL_FILE,
+                    model::TOKENS_FILE
+                );
+                logging::info(&message);
+                self.settings.model_message = Some((false, message));
+                self.overlay.present(
+                    OverlayKind::Error,
+                    "还没有可导入的模型",
+                    "已打开导入目录，放入文件后再导入一次",
+                    Some(Duration::from_secs(6)),
+                );
+            }
+            Err(err) => {
+                logging::error(&format!("离线模型导入失败：{err}"));
+                self.settings.model_message = Some((false, err));
+                self.overlay.present(
+                    OverlayKind::Error,
+                    "本地模型导入失败",
+                    "详细原因见设置窗口或 voxkey.log",
+                    Some(Duration::from_secs(8)),
+                );
+            }
+        }
+        ctx.request_repaint();
+    }
+
     fn apply_tray_state(&mut self) {
         self.platform.set_tray_state(TrayState {
             language: self.config.language,
@@ -215,6 +483,8 @@ impl VoxKeyApp {
         match event {
             EngineEvent::Ready => {
                 self.engine_ready = true;
+                self.download_sample = None;
+                self.download_rate = 0.0;
                 if self.overlay.kind == OverlayKind::Download {
                     self.overlay.schedule_hide(Duration::from_millis(650));
                 }
@@ -222,6 +492,9 @@ impl VoxKeyApp {
             EngineEvent::Status(text) => {
                 if self.session_active {
                     self.overlay.set_detail(text);
+                } else if self.overlay.kind == OverlayKind::Download {
+                    // "下载完成但还在加载" must not look like a frozen 100%.
+                    self.overlay.set_detail(&text);
                 }
             }
             EngineEvent::Download {
@@ -232,12 +505,16 @@ impl VoxKeyApp {
                 if self.session_active {
                     return;
                 }
-                let percent = if total > 0 {
-                    (downloaded as f64 / total as f64 * 100.0).round() as u32
-                } else {
-                    0
-                };
-                let detail = if total > 0 {
+                let rate = self.track_download_rate(downloaded);
+                // Floor and cap at 99 until the whole model is ready: a rounded
+                // 100% while the second file is still missing was exactly what
+                // made users think the download had hung.
+                let percent = downloaded
+                    .saturating_mul(100)
+                    .checked_div(total)
+                    .map(|value| (value as u32).min(if downloaded >= total { 100 } else { 99 }))
+                    .unwrap_or(0);
+                let mut detail = if total > 0 {
                     format!(
                         "{label} · {percent}% · {:.1} / {:.1} MB",
                         downloaded as f64 / 1_000_000.0,
@@ -246,8 +523,26 @@ impl VoxKeyApp {
                 } else {
                     format!("{label} · {:.1} MB", downloaded as f64 / 1_000_000.0)
                 };
+                if rate > 0.05 {
+                    detail.push_str(&format!(" · {rate:.1} MB/s"));
+                }
                 self.overlay
-                    .present(OverlayKind::Download, "正在下载本地语音模型", detail, None);
+                    .present(OverlayKind::Download, "正在准备本地语音模型", detail, None);
+            }
+            EngineEvent::ModelError(err) => {
+                self.engine_ready = false;
+                self.session_active = false;
+                self.download_sample = None;
+                self.download_rate = 0.0;
+                // The overlay can only show one short line; the full reason
+                // stays in the settings window and in voxkey.log.
+                self.settings.model_message = Some((false, err));
+                self.overlay.present(
+                    OverlayKind::Error,
+                    "本地语音模型未就绪",
+                    "可手动下载后从托盘“导入本地模型”（见 docs/offline-model.md）",
+                    Some(Duration::from_secs(20)),
+                );
             }
             EngineEvent::RecordingStarted => {
                 self.overlay.kind = OverlayKind::Listening;
@@ -413,8 +708,8 @@ impl VoxKeyApp {
         let viewport_id = egui::ViewportId::from_hash_of(SETTINGS_VIEWPORT_NAME);
         let builder = egui::ViewportBuilder::default()
             .with_title("VoxKey 设置")
-            .with_inner_size([520.0, 690.0])
-            .with_min_inner_size([440.0, 540.0])
+            .with_inner_size([520.0, 780.0])
+            .with_min_inner_size([440.0, 560.0])
             .with_resizable(true)
             .with_decorations(true);
 
@@ -423,7 +718,7 @@ impl VoxKeyApp {
             if ui.ctx().input(|input| input.viewport().close_requested()) {
                 close_requested = true;
             }
-            settings::draw(ui, &mut self.settings)
+            settings::draw(ui, &mut self.settings, &mut self.update)
         });
 
         if self.focus_settings {
@@ -567,7 +862,31 @@ impl eframe::App for VoxKeyApp {
             if action.save {
                 self.save_settings();
             }
+            if action.check_update {
+                self.start_update_check();
+            }
+            if action.download_update {
+                self.start_update_download();
+            }
+            if action.open_release
+                && let Some(info) = &self.update.info
+            {
+                platform::open_url(&info.page_url);
+            }
+            if action.import_model {
+                self.start_model_import();
+            }
+            if action.open_model_dir {
+                let dir = model::model_dir();
+                platform::open_url(&dir.display().to_string());
+            }
+            if action.reload_model {
+                self.reload_model();
+            }
             if self.settings.testing {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+            if self.update.checking || self.update.downloading {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }

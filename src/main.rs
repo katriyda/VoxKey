@@ -14,6 +14,8 @@ mod overlay;
 mod platform;
 mod secrets;
 mod settings;
+mod sha256;
+mod update;
 mod zh;
 
 use eframe::egui;
@@ -22,8 +24,16 @@ use windows::core::PCWSTR;
 
 fn main() {
     if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        // The updater runs the freshly downloaded build with `--version` as a
+        // self-check, so this line must be machine-readable. A release build is
+        // a GUI-subsystem executable without its own console; writing to a
+        // closed stdout must not panic.
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout(), "VoxKey {}", env!("CARGO_PKG_VERSION"));
         std::process::exit(0);
     }
+
+    update::cleanup_stale_files();
 
     let config = config::Config::load();
     let native_options = eframe::NativeOptions {

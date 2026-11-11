@@ -25,8 +25,8 @@ VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住�
 ## 使用
 
 1. 从 [Releases](https://github.com/katriyda/VoxKey/releases) 下载 `VoxKey.exe`，双击运行。程序无主窗口，常驻系统托盘。
-2. 首次运行会下载 SenseVoice int8 模型（约 229 MB），屏幕底部悬浮窗显示下载进度。模型缓存在：
-   `%LOCALAPPDATA%\VoxKey\models\sensevoice-int8\`
+2. 首次运行会下载 SenseVoice int8 模型（约 229 MB），屏幕底部悬浮窗显示进度与速率。下载支持断点续传：中断后保留 `.part`，下次启动从已下载的字节继续；连接超过 30 秒没有新字节会换镜像重试（HF → hf-mirror，最多 3 轮）。模型缓存在 `%LOCALAPPDATA%\VoxKey\models\sensevoice-int8\`。
+   网络受限、卡在某个百分比不动时，可手动下载两个文件并导入，完整步骤见 [docs/offline-model.md](docs/offline-model.md)。
 3. 默认按住**右 Ctrl**说话，松开后自动识别并插入。也可在托盘 `设置…` 中修改为：
    - 右 Ctrl（默认）
    - `Ctrl + Shift + 空格`
@@ -39,12 +39,23 @@ VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住�
 
 因此默认使用右 Ctrl 作为可靠替代，并提供可配置快捷键。设置页有 `Fn / F13` 预设，用于少数会把 Fn 映射为 F13 的键盘；同时钩子会额外探测 `F13` 与相关扫描码，因此即使当前配置是右 Ctrl，支持上报 F13 的设备也可直接用 Fn 触发。这是有意为之的可用性取舍，而不是遗漏。
 
+## 模型下载与离线导入
+
+首次运行只需要两个文件：`model.int8.onnx`（239,233,841 字节）与 `tokens.txt`（315,894 字节），
+固定在 sherpa-onnx 的 `sensevoice-zh-en-ja-ko-yue-2024-07-17` revision 上。
+
+- 下载中：悬浮窗按文件显示阶段、百分比、已下载 MB 与速率；连接 30 秒没有新字节就换镜像/重试，`.part` 保留，下次启动续传。
+- 卡住时：托盘 → **导入本地模型**；把文件放进 `%LOCALAPPDATA%\VoxKey\models\inbox` 后点一次即可，下次启动也会自动尝试导入。
+- 校验：导入时强制校验文件大小与 SHA-256；正常启动只按大小快速判断，避免每次启动都哈希 239 MB。
+- 直链、哈希、aria2/curl 命令、常见报错对照：见 [docs/offline-model.md](docs/offline-model.md)。
+
 ## 配置与数据
 
 | 内容 | 默认位置 | 覆盖环境变量 |
 | --- | --- | --- |
 | 设置文件 | `%APPDATA%\VoxKey\config.json` | `VOXKEY_DATA_DIR` |
 | 模型缓存 | `%LOCALAPPDATA%\VoxKey\models\sensevoice-int8\` | `VOXKEY_MODEL_DIR` |
+| 手动导入目录 | `%LOCALAPPDATA%\VoxKey\models\inbox\` | `VOXKEY_IMPORT_DIR` |
 | 错误日志 | `%APPDATA%\VoxKey\voxkey.log` | `VOXKEY_DATA_DIR` |
 
 配置示例（API Key 实际以 `api_key_enc` 密文存储，不会出现明文）：
@@ -138,7 +149,8 @@ src/main.rs        eframe 启动、窗口参数
 src/app.rs         状态机、悬浮窗显示/隐藏/定位、托盘事件、设置窗口
 src/engine.rs      录音线程：模型加载、录音、预览识别、最终识别、LLM、插入
 src/audio.rs       cpal 采集与 16 kHz 线性重采样
-src/model.rs        SenseVoice 首次下载（HF / hf-mirror）与缓存校验
+src/model.rs        SenseVoice 首次下载（HF / hf-mirror，断点续传 + 停滞超时 + SHA-256 校验）与离线导入
+src/sha256.rs       模型文件的纯 Rust SHA-256 校验（不引入额外 crypto 依赖）
 src/platform.rs    WH_KEYBOARD_LL、托盘菜单、隐藏窗口、NoActivate/工作区
 src/clipboard.rs   剪贴板快照/恢复、SendInput Ctrl+V
 src/llm.rs         OpenAI-compatible 纠错、保守守卫、连接测试
@@ -204,7 +216,7 @@ a8d1e2bc9b6d335c783b5398b523465c11f481905abe93ec037b0c4f6670f591
 - **“实时”转写**：SenseVoice 是离线模型。VoxKey 通过录音期间周期性重跑识别来更新右侧预览文字，并非常规意义上的流式 ASR；长句预览会有约 1 秒级延迟，最终文字以松键后的结果为准。
 - **繁体中文**：使用 OpenCC 单字映射进行简体→繁体转换，不做完整的地区词/短语本地化；个别一简对多繁的字词可能不完美。
 - **剪贴板恢复**：GDI 句柄型格式不支持完整恢复；见上文。
-- **自动下载网络**：模型优先从 Hugging Face 下载，失败时回退 hf-mirror。若两个镜像都不可达，首次运行会显示错误；可手动按上述目录放置 `model.int8.onnx` 与 `tokens.txt` 后重启。
+- **自动下载网络**：模型优先从 Hugging Face 下载，失败时回退 hf-mirror；支持断点续传与 30 秒停滞检测，两个镜像都不可达时会给出错误而不是永远停在进度条上。网络受限时可手动下载并导入（托盘 → 导入本地模型），见 [docs/offline-model.md](docs/offline-model.md)。
 - **运行时验证**：构建与单元测试在 GitHub Actions（Windows）上执行；真实麦克风、托盘、焦点保持、中文输入法兼容性和各机型的 Fn 行为需要在目标 Windows 设备上实测。仓库会明确记录已验证和未验证项。
 - **快捷键冲突**：全局钩子只能观察，不能在所有场景下阻止快捷键被当前应用同时接收；默认右 Ctrl 通常无冲突，若自定义为常用组合请自行注意。
 - **代码签名**：当前 Release 未做 Authenticode 签名，Windows SmartScreen 可能提示“未知发布者”；可自行校验上面的 SHA-256。

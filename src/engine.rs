@@ -28,6 +28,7 @@ pub enum EngineCommand {
         refine: RefineConfig,
     },
     Stop,
+    ReloadModel,
     Shutdown,
 }
 
@@ -43,6 +44,12 @@ impl EngineHandle {
 
     pub fn stop(&self) {
         let _ = self.tx.send(EngineCommand::Stop);
+    }
+
+    /// Re-runs model preparation (download, import, verification) and reloads
+    /// the recognizer without restarting the process.
+    pub fn reload_model(&self) {
+        let _ = self.tx.send(EngineCommand::ReloadModel);
     }
 
     pub fn shutdown(&self) {
@@ -67,8 +74,11 @@ pub fn spawn(
 }
 
 fn emit(tx: &Sender<UiEvent>, ctx: &egui::Context, event: EngineEvent) {
-    if let EngineEvent::Error(ref message) = event {
-        crate::logging::error(message);
+    match &event {
+        EngineEvent::Error(message) | EngineEvent::ModelError(message) => {
+            crate::logging::error(message);
+        }
+        _ => {}
     }
     let _ = tx.send(UiEvent::Engine(event));
     ctx.request_repaint();
@@ -115,56 +125,15 @@ fn run_engine(
         }
     };
 
-    emit(
-        &tx,
-        &ctx,
-        EngineEvent::Status("正在准备本地语音模型…".to_string()),
-    );
-
-    let model_dir = {
-        let mut progress = |downloaded: u64, total: u64, label: &str| {
-            emit(
-                &tx,
-                &ctx,
-                EngineEvent::Download {
-                    downloaded,
-                    total,
-                    label: label.to_string(),
-                },
-            );
-        };
-        model::ensure_model(&runtime, &mut progress)
-    };
-
     let mut state = RuntimeState {
         backend: None,
         model_dir: None,
         backend_error: None,
     };
 
-    match model_dir {
-        Ok(dir) => {
-            state.model_dir = Some(dir.clone());
-            emit(
-                &tx,
-                &ctx,
-                EngineEvent::Status("正在加载语音模型…".to_string()),
-            );
-            match load_backend(&dir, initial_language) {
-                Ok(backend) => {
-                    state.backend = Some(backend);
-                    emit(&tx, &ctx, EngineEvent::Ready);
-                }
-                Err(err) => {
-                    state.backend_error = Some(err.clone());
-                    emit(&tx, &ctx, EngineEvent::Error(err));
-                }
-            }
-        }
-        Err(err) => {
-            state.backend_error = Some(err.clone());
-            emit(&tx, &ctx, EngineEvent::Error(err));
-        }
+    if let Err(err) = prepare_model(&mut state, &runtime, initial_language, &tx, &ctx) {
+        state.backend_error = Some(err.clone());
+        emit(&tx, &ctx, EngineEvent::ModelError(err));
     }
 
     let mut session: Option<Session> = None;
@@ -176,6 +145,17 @@ fn run_engine(
                     match start_session(&mut state, language, refine, &tx, &ctx) {
                         Ok(new_session) => session = Some(new_session),
                         Err(err) => emit(&tx, &ctx, EngineEvent::Error(err)),
+                    }
+                }
+                Ok(EngineCommand::ReloadModel) => {
+                    let language = state
+                        .backend
+                        .as_ref()
+                        .map(|backend| backend.language)
+                        .unwrap_or(initial_language);
+                    if let Err(err) = prepare_model(&mut state, &runtime, language, &tx, &ctx) {
+                        state.backend_error = Some(err.clone());
+                        emit(&tx, &ctx, EngineEvent::ModelError(err));
                     }
                 }
                 Ok(EngineCommand::Stop) => {}
@@ -199,6 +179,10 @@ fn run_engine(
                 }
                 Ok(EngineCommand::Start { .. }) => {
                     // Ignore key bounce / a second press during a session.
+                }
+                Ok(EngineCommand::ReloadModel) => {
+                    // The current recording wins; the tray action can be used
+                    // again afterwards.
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -287,6 +271,53 @@ fn run_engine(
     {
         let _ = recorder.stop();
     }
+}
+
+/// Prepares (downloads/imports/loads) the model and reports progress through
+/// `EngineEvent`. `ModelError` is emitted by the caller so every failure path
+/// ends up in the same UI state.
+fn prepare_model(
+    state: &mut RuntimeState,
+    runtime: &tokio::runtime::Runtime,
+    language: Language,
+    tx: &Sender<UiEvent>,
+    ctx: &egui::Context,
+) -> Result<(), String> {
+    emit(
+        tx,
+        ctx,
+        EngineEvent::Status("正在准备本地语音模型…".to_string()),
+    );
+
+    let dir = {
+        let mut progress = |downloaded: u64, total: u64, label: &str| {
+            emit(
+                tx,
+                ctx,
+                EngineEvent::Download {
+                    downloaded,
+                    total,
+                    label: label.to_string(),
+                },
+            );
+        };
+        model::ensure_model(runtime, &mut progress)?
+    };
+
+    // Once the files are on disk the overlay must stop looking like a stalled
+    // download, even while the recognizer is still loading.
+    emit(
+        tx,
+        ctx,
+        EngineEvent::Status("正在加载语音模型…".to_string()),
+    );
+
+    let backend = load_backend(&dir, language).map_err(|err| format!("语音模型加载失败：{err}"))?;
+    state.model_dir = Some(dir);
+    state.backend = Some(backend);
+    state.backend_error = None;
+    emit(tx, ctx, EngineEvent::Ready);
+    Ok(())
 }
 
 fn start_session(

@@ -14,6 +14,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    ShellExecuteW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CallWindowProcW, CreateIconFromResourceEx,
@@ -22,13 +23,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetWindowLongPtrW, HICON, HMENU, HTTRANSPARENT, IDC_ARROW, IDI_APPLICATION,
     IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LoadCursorW, LoadIconW, MENU_ITEM_FLAGS, MSG,
     PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW, SPI_GETWORKAREA,
-    SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW,
-    TRACK_POPUP_MENU_FLAGS, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCHITTEST,
-    WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC, WS_CAPTION,
-    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP,
-    WS_SYSMENU, WS_THICKFRAME,
+    SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    SetWindowsHookExW, SystemParametersInfoW, TRACK_POPUP_MENU_FLAGS, TrackPopupMenu,
+    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCHITTEST, WM_NULL, WM_QUIT, WM_RBUTTONUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::PCWSTR;
 
@@ -295,8 +296,12 @@ const TRAY_CALLBACK: u32 = 0x8001; // WM_APP + 1
 
 const ID_LANG_BASE: u32 = 1;
 const ID_TOGGLE_LLM: u32 = 20;
+const ID_CHECK_UPDATE: u32 = 25;
 const ID_SETTINGS: u32 = 30;
 const ID_EXIT: u32 = 40;
+const ID_IMPORT_MODEL: u32 = 50;
+const ID_OPEN_MODEL_DIR: u32 = 51;
+const ID_RELOAD_MODEL: u32 = 52;
 
 struct TrayRuntime {
     raw_hwnd: isize,
@@ -557,6 +562,12 @@ fn show_tray_menu(runtime: &TrayRuntime) {
         "LLM 纠错",
         state.llm_enabled,
     );
+    append_menu(menu, 0, ID_CHECK_UPDATE as usize, "检查更新…", false);
+    append_menu(menu, 0x800, 0, "", false);
+    append_menu(menu, 0, ID_IMPORT_MODEL as usize, "导入本地模型…", false);
+    append_menu(menu, 0, ID_OPEN_MODEL_DIR as usize, "打开模型目录…", false);
+    append_menu(menu, 0, ID_RELOAD_MODEL as usize, "重新加载模型", false);
+    append_menu(menu, 0x800, 0, "", false);
     append_menu(menu, 0, ID_SETTINGS as usize, "设置…", false);
     append_menu(menu, 0x800, 0, "", false);
     append_menu(menu, 0, ID_EXIT as usize, "退出", false);
@@ -607,6 +618,34 @@ fn handle_menu_command(id: u32) {
                 &runtime.tx,
                 &runtime.ctx,
                 UiEvent::Tray(TrayAction::ToggleLlm),
+            );
+        }
+        ID_CHECK_UPDATE => {
+            send_ui(
+                &runtime.tx,
+                &runtime.ctx,
+                UiEvent::Tray(TrayAction::CheckUpdate),
+            );
+        }
+        ID_IMPORT_MODEL => {
+            send_ui(
+                &runtime.tx,
+                &runtime.ctx,
+                UiEvent::Tray(TrayAction::ImportModel),
+            );
+        }
+        ID_OPEN_MODEL_DIR => {
+            send_ui(
+                &runtime.tx,
+                &runtime.ctx,
+                UiEvent::Tray(TrayAction::OpenModelDir),
+            );
+        }
+        ID_RELOAD_MODEL => {
+            send_ui(
+                &runtime.tx,
+                &runtime.ctx,
+                UiEvent::Tray(TrayAction::ReloadModel),
             );
         }
         ID_SETTINGS => {
@@ -822,4 +861,20 @@ fn fill_wide_buffer<const N: usize>(buffer: &mut [u16; N], text: &str) {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Opens a URL with the user's default browser through the Shell.
+pub fn open_url(url: &str) {
+    let verb = wide("open");
+    let target = wide(url);
+    unsafe {
+        let _ = ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(target.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
 }
