@@ -18,16 +18,17 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CallWindowProcW, CreateIconFromResourceEx,
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GWL_EXSTYLE, GWLP_WNDPROC, GetCursorPos, GetForegroundWindow, GetMessageW,
-    GetWindowLongPtrW, HICON, HMENU, HTTRANSPARENT, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS,
-    KBDLLHOOKSTRUCT, LLKHF_INJECTED, LoadCursorW, LoadIconW, MENU_ITEM_FLAGS, MSG, PostMessageW,
-    PostQuitMessage, PostThreadMessageW, RegisterClassW, SPI_GETWORKAREA, SWP_FRAMECHANGED,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW,
+    DispatchMessageW, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC, GetCursorPos, GetForegroundWindow,
+    GetMessageW, GetWindowLongPtrW, HICON, HMENU, HTTRANSPARENT, IDC_ARROW, IDI_APPLICATION,
+    IMAGE_FLAGS, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LoadCursorW, LoadIconW, MENU_ITEM_FLAGS, MSG,
+    PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW, SPI_GETWORKAREA,
+    SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW,
     TRACK_POPUP_MENU_FLAGS, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCHITTEST,
-    WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC,
-    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC, WS_CAPTION,
+    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::PCWSTR;
 
@@ -739,6 +740,31 @@ pub fn configure_overlay_window(hwnd: HWND) {
             & !(WS_EX_APPWINDOW.0 as isize);
         if new_style != style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
+        }
+
+        // winit/eframe can end up creating the overlay as a decorated
+        // overlapped window (caption + thick frame + system menu). That leaves
+        // a white title bar with a close button pinned on screen, which is
+        // exactly what users see as "a stuck white box". Force a borderless
+        // popup here as well, so the capsule is the only thing ever painted.
+        let window_style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let borderless = ((window_style as u32) | WS_POPUP.0)
+            & !(WS_CAPTION.0
+                | WS_THICKFRAME.0
+                | WS_SYSMENU.0
+                | WS_MINIMIZEBOX.0
+                | WS_MAXIMIZEBOX.0);
+        if borderless as isize != window_style {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, borderless as isize);
             let _ = SetWindowPos(
                 hwnd,
                 None,
