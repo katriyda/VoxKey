@@ -93,6 +93,24 @@ jobs:
             throw "VoxKey.exe --version printed '$($stdout.Trim())', expected 'VoxKey $version'"
           }
 
+      - name: Verify embedded version resource
+        # build.rs compiles the icon, VERSIONINFO and UAC manifest with rc.exe.
+        # If the resource compiler is ever missing the block would silently
+        # disappear, leaving an anonymous binary that SmartScreen and antivirus
+        # ML classifiers distrust. Assert the metadata is really in the PE.
+        shell: pwsh
+        run: |
+          $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+          $version = $match.Matches[0].Groups[1].Value
+          $info = (Get-Item "target\release\VoxKey.exe").VersionInfo
+          Write-Output "CompanyName=$($info.CompanyName) FileDescription=$($info.FileDescription) ProductVersion=$($info.ProductVersion)"
+          if ($info.CompanyName -ne "VoxKey") {
+            throw "VERSIONINFO resource missing: CompanyName='$($info.CompanyName)'"
+          }
+          if ($info.ProductVersion -ne $version) {
+            throw "VERSIONINFO ProductVersion '$($info.ProductVersion)' does not match Cargo.toml '$version'"
+          }
+
       - name: Upload single-file artifact
         uses: actions/upload-artifact@v7
         with:

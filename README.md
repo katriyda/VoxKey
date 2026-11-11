@@ -21,6 +21,7 @@ VoxKey 是一个面向 Windows 10/11 的本地优先语音输入工具：按住�
 | 托盘 | 语言切换、LLM 开/关、Settings、退出 |
 | 设置 | Base URL、API Key、Model、Test、Save；快捷键/语言也可在此保存 |
 | 密钥安全 | API Key 使用 Windows DPAPI（CurrentUser）加密后写入配置文件；清空后不保留密文 |
+| 发布资源 | `build.rs` 调用 MSVC `rc.exe` 嵌入图标、`VERSIONINFO` 与 `asInvoker` 清单（`assets/voxkey.rc`、`assets/voxkey.manifest`） |
 
 ## 使用
 
@@ -126,11 +127,59 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-工作流见 [`.github/workflows/build.yml`](.github/workflows/build.yml)：`cargo test --release` → `cargo build --release` → 检查 DLL 依赖 → 单文件 artifact → Tag 时发布 Release。通过 `.cargo/config.toml` 与 Release profile 尽可能静态链接，最终 artifact 只有：
+工作流见 [`.github/workflows/build.yml`](.github/workflows/build.yml)：`cargo test --release` → `cargo build --release` → 检查 DLL 依赖 → 校验嵌入的版本资源 → 单文件 artifact → Tag 时发布 Release。`build.rs` 会用 MSVC 的 `rc.exe` 编译 `assets/voxkey.rc`（图标、`VERSIONINFO`、`asInvoker` 清单）并链接进 exe；找不到 `rc.exe` 时构建直接失败，避免发布没有任何元数据的“裸”二进制（确需跳过可设 `VOXKEY_SKIP_RC=1`，Release 不允许）。通过 `.cargo/config.toml` 与 Release profile 尽可能静态链接，最终 artifact 只有：
 
 ```text
 target/release/VoxKey.exe
 ```
+
+## 杀软误报、签名与校验
+
+**当前所有 Release 都没有 Authenticode 签名**，所以下载和运行时的安全提示是预期现象，不代表文件被投毒。
+
+### 会看到什么
+
+| 提示 | 来源 | 原因 |
+| --- | --- | --- |
+| 浏览器“此文件可能有害 / 不常下载” | Chrome、Edge 的 Safe Browsing | 新文件哈希、零下载量、无发布者 |
+| “Windows 已保护你的电脑”（未知发布者） | SmartScreen | 浏览器给 exe 打了 Mark-of-the-Web，而程序没有签名 |
+| Defender 报出具体名字（如 `Trojan:Win32/Wacatac!ml` 这类机器学习命名） | Defender 启发式 / ML | 未签名 + 全局键盘钩子 + 剪贴板注入 + 自更新替换自身，行为特征与键盘记录器、下载器重叠 |
+
+这三类判断都基于**信誉与行为**，不是特征码比对。VoxKey 的相关行为如实说明：
+
+- `WH_KEYBOARD_LL` 全局键盘钩子只用于识别热键，不记录、不落盘、不上传任何按键内容（`src/platform.rs`）；
+- 剪贴板只在每轮插入前后读取/写入/恢复各一次（`src/clipboard.rs`）；
+- 应用内更新会下载 exe，校验大小、PE 头、SHA-256 与版本号，然后替换正在运行的自身（`src/update.rs`）——标准自更新流程，但 ML 引擎很容易把它和 dropper 混为一谈；
+- 首次运行会从 Hugging Face 下载约 229 MB 模型到 `%LOCALAPPDATA%`；启用 LLM 纠错时只发送识别后的**文本**。
+
+音频始终在本机识别，不收集遥测。
+
+### 下载后先校验
+
+只从 [Releases](https://github.com/katriyda/VoxKey/releases) 下载，并核对 Release 说明里给出的大小与 SHA-256：
+
+```powershell
+Get-FileHash .\VoxKey.exe -Algorithm SHA256
+(Get-Item .\VoxKey.exe).Length
+```
+
+一致说明文件与 CI 产物逐字节相同；不一致就不要运行，删掉重新下载。
+
+### 被拦住了怎么办
+
+1. 去掉“来自网络”标记：`Unblock-File .\VoxKey.exe`；
+2. SmartScreen 弹窗点“更多信息 → 仍要运行”；
+3. Defender 已隔离：Windows 安全中心 → 保护历史记录 → 允许该项目；
+4. 公司/学校设备可能由管理员策略统一拦截，需要 IT 把哈希加白，普通用户改不了；
+5. 仍被误报可向微软提交（<https://www.microsoft.com/en-us/wdsi/filesubmission>，选“软件开发者 / 误报”并附哈希），这是修正特征库与信誉库的官方通道。
+
+**只在确认哈希一致后放行**，不要为此关闭整机实时防护。
+
+### 我们做了什么、还差什么
+
+- 从下一个构建开始，`build.rs` 会用 MSVC 的 `rc.exe` 把图标、`VERSIONINFO`（产品名、描述、版本、版权）和 `asInvoker` 清单编进 exe，CI 还会断言这些元数据确实进了产物。这能让“属性 → 详细信息”不再是一片空白、降低 ML 打分，但**不会**让“未知发布者”消失。
+- 根治手段是 **Authenticode 代码签名 + 时间戳**（OV/EV 证书或 Azure Trusted Signing）。签名后发布者显示为组织名，SmartScreen 不再按“未知发布者”拦截；OV 证书还需要下载量积累信誉，EV 起步信誉更好。接入签名后，应用内更新“下载 → 替换”的整条链路也会一起变干净。
+- 在此之前，每个 Release 说明都会附文件大小与 SHA-256，供自行校验。
 
 ## 技术栈
 
@@ -161,6 +210,7 @@ src/settings.rs    Settings UI
 src/zh.rs          简体→繁体单字转换
 src/hotkey.rs      快捷键解析
 src/update.rs      应用内更新：GitHub Release 检查、下载校验、替换重启
+build.rs           Win32 资源：图标、VERSIONINFO、asInvoker 清单（调用 rc.exe）
 ```
 
 ## 验证状态（2026-11-10）
@@ -236,7 +286,7 @@ a8d1e2bc9b6d335c783b5398b523465c11f481905abe93ec037b0c4f6670f591
 - **自动下载网络**：模型优先从 Hugging Face 下载，失败时回退 hf-mirror；支持断点续传与 30 秒停滞检测，两个镜像都不可达时会给出错误而不是永远停在进度条上。网络受限时可手动下载并导入（托盘 → 导入本地模型），见 [docs/offline-model.md](docs/offline-model.md)。
 - **运行时验证**：构建与单元测试在 GitHub Actions（Windows）上执行；真实麦克风、托盘、焦点保持、中文输入法兼容性和各机型的 Fn 行为需要在目标 Windows 设备上实测。仓库会明确记录已验证和未验证项。
 - **快捷键冲突**：全局钩子只能观察，不能在所有场景下阻止快捷键被当前应用同时接收；默认右 Ctrl 通常无冲突，若自定义为常用组合请自行注意。
-- **代码签名**：当前 Release 未做 Authenticode 签名，Windows SmartScreen 可能提示“未知发布者”；可自行校验上面的 SHA-256。
+- **代码签名**：当前 Release 未做 Authenticode 签名，SmartScreen 可能提示“未知发布者”，部分杀软会给出基于行为的误报；原因、哈希校验与放行步骤见上文「杀软误报、签名与校验」。
 - **托盘与提权**：Windows 的 UIPI 机制会阻止提权进程向普通权限的 Explorer 添加托盘图标。请以普通用户身份运行 VoxKey。
 
 ## 第三方资源与许可

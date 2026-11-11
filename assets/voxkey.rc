@@ -1,0 +1,56 @@
+// Win32 resource template for VoxKey.
+//
+// build.rs substitutes the version placeholders (VERSION_STR, VERSION_COMMA,
+// VERSION_DOT4) from Cargo.toml, copies this file plus the icon and manifest
+// into OUT_DIR, and runs the MSVC resource compiler (rc.exe) on the copy. The
+// resulting .res is linked into the exe.
+//
+// Keep this file ASCII-only: rc.exe decodes string literals with the system
+// code page unless a code page is forced, and the CI runner's default code page
+// is not UTF-8. Chinese descriptions here would silently turn into mojibake in
+// the Explorer "Details" tab.
+//
+// The numeric resource types are spelled out instead of including <windows.h>,
+// so rc.exe does not need the Windows SDK include path.
+
+#define RT_MANIFEST 24
+
+// Explorer, the taskbar and Alt-Tab pick the lowest-numbered icon group, so the
+// application icon must stay at id 1.
+1 ICON "voxkey.ico"
+
+// UAC / compatibility manifest; 1 == CREATEPROCESS_MANIFEST_RESOURCE_ID.
+1 RT_MANIFEST "voxkey.manifest"
+
+// Version block. Without it an unsigned exe looks like an anonymous blob to
+// Explorer, SmartScreen and antivirus ML classifiers alike.
+1 VERSIONINFO
+FILEVERSION @VERSION_COMMA@
+PRODUCTVERSION @VERSION_COMMA@
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // 0x0409 = en-US, 0x04B0 = Unicode.
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "VoxKey"
+            VALUE "FileDescription", "VoxKey - hold-to-talk voice input for Windows"
+            VALUE "FileVersion", "@VERSION_STR@"
+            VALUE "InternalName", "VoxKey"
+            VALUE "LegalCopyright", "MIT License. Copyright (c) VoxKey contributors"
+            VALUE "OriginalFilename", "VoxKey.exe"
+            VALUE "ProductName", "VoxKey"
+            VALUE "ProductVersion", "@VERSION_STR@"
+            VALUE "Comments", "Local-first speech to text. No telemetry."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 0x4B0
+    END
+END
