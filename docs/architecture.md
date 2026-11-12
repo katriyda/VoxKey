@@ -14,6 +14,8 @@
 
 `VoxKey.exe` 只做 UI、全局钩子、托盘、剪贴板、设置与下载；SenseVoice 推理在独立进程 `VoxKey-asr.exe` 中运行，因此 UI 本体不含 sherpa-onnx 与 onnxruntime（约 19 MB）。worker 与模型一样按需下载到 `%LOCALAPPDATA%\VoxKey\bin\`，启动方式为继承 stdin/stdout 管道并加 `CREATE_NO_WINDOW`，协议是逐行 JSON 加长度已知的 `f32` PCM 数据（16 kHz 单声道）；worker 在管道 EOF 时自行退出，UI 被杀不会留下孤儿进程。识别质量与原进程内方案完全一致：同一模型、同一解码代码。
 
+录音期间的预览由 UI 侧增量驱动：每 250 ms 检查一次新音频，按约 280 ms 的停顿切分，已结束的句子只送 worker 识别一次并拼接保留，只对当前未结束的句子重复识别（超过 8 秒强制切分）。这样每帧的识别成本只与当前句子长度有关，不会像“整段重跑”那样随录音时长线性增长；松键后的最终识别仍使用完整录音。
+
 ## 模块结构
 
 ```text

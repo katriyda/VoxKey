@@ -29,6 +29,24 @@ const MIN_RECORDING_SECONDS: f32 = 0.35;
 const MIN_VOICE_RMS: f32 = 0.008;
 const SOFT_SINGLE_CHAR_RMS: f32 = 0.025;
 
+/// How often the live preview is refreshed while the hotkey is held. SenseVoice
+/// decodes at roughly 4% of real time (measured: 40 ms per second of audio on a
+/// 4-thread int8 CPU run), so a quarter-second cadence keeps the preview within
+/// one short utterance of what the user just said.
+const PARTIAL_INTERVAL: Duration = Duration::from_millis(250);
+/// Energy analysis frame for pause detection.
+const VAD_FRAME_MS: u32 = 10;
+/// A pause this long finishes the current preview segment: it is decoded once
+/// and kept as text, so the live preview only re-decodes the current phrase.
+const SEGMENT_SILENCE_MS: u32 = 280;
+/// Shortest closed segment worth decoding on its own.
+const SEGMENT_MIN_SECONDS: f32 = 0.15;
+/// Longest open phrase before it is committed anyway. Continuous speech with
+/// no pause otherwise makes the per-preview decode cost grow without bound.
+const MAX_OPEN_SEGMENT_SECONDS: f32 = 8.0;
+/// Do not decode a tail shorter than this; it only produces noise or "嗯".
+const PREVIEW_MIN_SECONDS: f32 = 0.30;
+
 pub enum EngineCommand {
     Start {
         language: Language,
@@ -102,7 +120,76 @@ struct Session {
     refine: RefineConfig,
     next_level: Instant,
     next_partial: Instant,
-    last_partial_samples: usize,
+    partial: PartialState,
+}
+
+/// Live-preview state. The recording is cut at pauses: every closed segment is
+/// decoded once and appended to `committed`; only the open phrase is decoded
+/// again on each refresh, which is what keeps the preview real-time for long
+/// dictation instead of re-decoding the entire buffer.
+#[derive(Default)]
+struct PartialState {
+    /// Absolute raw sample index already scanned for pauses.
+    scan: usize,
+    /// Absolute raw sample index where the open phrase starts.
+    segment_start: usize,
+    /// Length of the current run of quiet frames.
+    silence_run: usize,
+    /// Whether the open phrase contains any non-quiet frame.
+    has_speech: bool,
+    /// Text of segments that already ended in a pause.
+    committed: String,
+    /// Last text sent to the overlay, to avoid repainting identical content.
+    last_emitted: String,
+}
+
+impl PartialState {
+    /// Scans newly captured raw audio (`chunk`, starting at absolute `base`)
+    /// and returns the ranges of phrases that just ended in a pause.
+    fn scan_pauses(
+        &mut self,
+        chunk: &[f32],
+        base: usize,
+        frame: usize,
+        silence_frames: usize,
+    ) -> Vec<(usize, usize)> {
+        debug_assert!(frame > 0);
+        let mut closed = Vec::new();
+        let frames = chunk.len() / frame;
+        for index in 0..frames {
+            let start = base + index * frame;
+            let frame_samples = &chunk[index * frame..(index + 1) * frame];
+            if rms(frame_samples) < MIN_VOICE_RMS {
+                self.silence_run += frame;
+                if self.has_speech && self.silence_run >= silence_frames * frame {
+                    let end = start + frame - self.silence_run;
+                    closed.push((self.segment_start, end));
+                    self.segment_start = start + frame;
+                    self.silence_run = 0;
+                    self.has_speech = false;
+                }
+            } else {
+                self.silence_run = 0;
+                self.has_speech = true;
+            }
+        }
+        self.scan = base + frames * frame;
+        closed
+    }
+
+    /// Commits the open phrase when it grew past `max_samples` without a pause,
+    /// so a continuous speaker never makes each preview slower than real time.
+    fn take_forced(&mut self, total: usize, max_samples: usize) -> Option<(usize, usize)> {
+        if self.has_speech && total.saturating_sub(self.segment_start) >= max_samples {
+            let range = (self.segment_start, total);
+            self.segment_start = total;
+            self.silence_run = 0;
+            self.has_speech = false;
+            Some(range)
+        } else {
+            None
+        }
+    }
 }
 
 struct RuntimeState {
@@ -223,22 +310,8 @@ fn run_engine(
         }
 
         if now >= current.next_partial {
-            current.next_partial = now + Duration::from_millis(1300);
-            let samples = recorder.snapshot();
-            let sample_rate = recorder.sample_rate();
-            let new_samples = samples.len().saturating_sub(current.last_partial_samples);
-            if new_samples > sample_rate as usize / 4 && rms(&samples) >= MIN_VOICE_RMS {
-                current.last_partial_samples = samples.len();
-                if duration_seconds(samples.len(), sample_rate) >= 0.8 {
-                    match transcribe(&mut state, &samples, sample_rate, current.language) {
-                        Ok(text) if has_meaningful_text(&text) => {
-                            emit(&tx, &ctx, EngineEvent::Transcript(text));
-                        }
-                        Ok(_) => {}
-                        Err(err) => eprintln!("VoxKey: partial decode failed: {err}"),
-                    }
-                }
-            }
+            refresh_preview(&mut state, current, &tx, &ctx);
+            current.next_partial = Instant::now() + PARTIAL_INTERVAL;
         }
 
         let sample_count = current
@@ -283,6 +356,85 @@ fn run_engine(
         && let Some(recorder) = current.recorder.take()
     {
         let _ = recorder.stop();
+    }
+}
+
+/// Refreshes the overlay preview without re-decoding the whole recording.
+///
+/// Audio is cut at pauses: every closed phrase is decoded once and kept, and
+/// only the phrase currently being spoken is decoded on each refresh. The
+/// per-refresh cost stays bounded no matter how long the user holds the key,
+/// which is what turns the previous ~1.3 second refresh into a near-real-time
+/// one.
+fn refresh_preview(
+    state: &mut RuntimeState,
+    session: &mut Session,
+    tx: &Sender<UiEvent>,
+    ctx: &egui::Context,
+) {
+    let recorder = session.recorder.as_ref().expect("active recorder");
+    let rate = recorder.sample_rate();
+    let total = recorder.sample_count();
+    let frame = (rate as usize * VAD_FRAME_MS as usize / 1000).max(1);
+    let silence_frames =
+        ((rate as usize * SEGMENT_SILENCE_MS as usize) / 1000 / frame).max(1);
+    let max_open = (rate as f64 * MAX_OPEN_SEGMENT_SECONDS as f64) as usize;
+
+    let scan = session.partial.scan;
+    let chunk = recorder.snapshot_range(scan, total);
+    let mut ranges = session.partial.scan_pauses(&chunk, scan, frame, silence_frames);
+    if let Some(range) = session.partial.take_forced(total, max_open) {
+        ranges.push(range);
+    }
+
+    for (start, end) in ranges {
+        if end <= start {
+            continue;
+        }
+        let raw = recorder.snapshot_range(start, end);
+        if rms(&raw) < MIN_VOICE_RMS {
+            continue;
+        }
+        let audio = resample_linear(&raw, rate, TARGET_RATE);
+        if duration_seconds(audio.len(), TARGET_RATE) < SEGMENT_MIN_SECONDS {
+            continue;
+        }
+        match transcribe(state, &audio, TARGET_RATE, session.language) {
+            Ok(text) if has_meaningful_text(&text) => {
+                session.partial.committed = join_preview(&session.partial.committed, &text);
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!("VoxKey: partial decode failed: {err}"),
+        }
+    }
+
+    // The phrase still being spoken: decode it and show it after the text that
+    // is already committed. It is capped by a pause or by `max_open`, so the
+    // cost of one refresh stays roughly constant. When the user pauses, the
+    // just-closed phrase is emitted on its own, without waiting for more speech.
+    let mut text = session.partial.committed.clone();
+    if session.partial.has_speech {
+        let start = session.partial.segment_start;
+        if total > start {
+            let raw = recorder.snapshot_range(start, total);
+            if rms(&raw) >= MIN_VOICE_RMS {
+                let audio = resample_linear(&raw, rate, TARGET_RATE);
+                if duration_seconds(audio.len(), TARGET_RATE) >= PREVIEW_MIN_SECONDS {
+                    match transcribe(state, &audio, TARGET_RATE, session.language) {
+                        Ok(tail) if has_meaningful_text(&tail) => {
+                            text = join_preview(&session.partial.committed, &tail);
+                        }
+                        Ok(_) => {}
+                        Err(err) => eprintln!("VoxKey: partial decode failed: {err}"),
+                    }
+                }
+            }
+        }
+    }
+
+    if has_meaningful_text(&text) && text != session.partial.last_emitted {
+        session.partial.last_emitted = text.clone();
+        emit(tx, ctx, EngineEvent::Transcript(text));
     }
 }
 
@@ -421,8 +573,8 @@ fn start_session(
         language,
         refine,
         next_level: now,
-        next_partial: now + Duration::from_millis(950),
-        last_partial_samples: 0,
+        next_partial: now + Duration::from_millis(250),
+        partial: PartialState::default(),
     })
 }
 
@@ -581,6 +733,29 @@ fn transcribe(
     Ok(postprocess(language, &raw))
 }
 
+/// Concatenates committed preview text and the phrase being decoded. Latin
+/// words need a separating space; CJK text and punctuation do not.
+fn join_preview(prefix: &str, tail: &str) -> String {
+    let prefix = prefix.trim_end();
+    let tail = tail.trim_start();
+    if prefix.is_empty() {
+        return tail.to_string();
+    }
+    if tail.is_empty() {
+        return prefix.to_string();
+    }
+    let last = prefix.chars().next_back().unwrap_or(' ');
+    let first = tail.chars().next().unwrap_or(' ');
+    let need_space = last.is_ascii()
+        && !last.is_ascii_whitespace()
+        && first.is_ascii_alphanumeric();
+    if need_space {
+        format!("{prefix} {tail}")
+    } else {
+        format!("{prefix}{tail}")
+    }
+}
+
 fn postprocess(language: Language, raw: &str) -> String {
     let cleaned = strip_sense_voice_tags(raw).trim().to_string();
     if language == Language::ZhTw {
@@ -674,5 +849,55 @@ mod tests {
         assert!((rms(&vec![0.1; 1000]) - 0.1).abs() < 1e-5);
         assert_eq!(meaningful_char_count("。"), 0);
         assert_eq!(meaningful_char_count("我。"), 1);
+    }
+
+    #[test]
+    fn preview_join_needs_spaces_only_between_latin_words() {
+        assert_eq!(join_preview("", "你好"), "你好");
+        assert_eq!(join_preview("你好，", "世界。"), "你好，世界。");
+        assert_eq!(join_preview("Hello", "world"), "Hello world");
+        assert_eq!(join_preview("Hello.", "World"), "Hello. World");
+        assert_eq!(join_preview("你好", ""), "你好");
+    }
+
+    fn frames(count: usize, energy: f32, frame: usize) -> Vec<f32> {
+        vec![energy; count * frame]
+    }
+
+    #[test]
+    fn pauses_close_the_current_segment() {
+        let frame = 160; // 10 ms at 16 kHz
+        let silence_frames = 28; // 280 ms
+        let mut state = PartialState::default();
+        let mut chunk = frames(10, 0.1, frame);
+        chunk.extend(frames(30, 0.0, frame));
+        let closed = state.scan_pauses(&chunk, 0, frame, silence_frames);
+        assert_eq!(closed, vec![(0, 10 * frame)]);
+        assert_eq!(state.segment_start, 38 * frame);
+        assert!(!state.has_speech);
+        assert_eq!(state.scan, 40 * frame);
+    }
+
+    #[test]
+    fn leading_silence_is_not_a_segment() {
+        let frame = 160;
+        let mut state = PartialState::default();
+        let chunk = frames(30, 0.0, frame);
+        let closed = state.scan_pauses(&chunk, 0, frame, 28);
+        assert!(closed.is_empty());
+        assert!(!state.has_speech);
+    }
+
+    #[test]
+    fn continuous_speech_is_committed_at_the_cap() {
+        let frame = 160;
+        let mut state = PartialState::default();
+        state.scan_pauses(&frames(20, 0.1, frame), 0, frame, 28);
+        let cap = 30 * frame;
+        let forced = state.take_forced(40 * frame, cap);
+        assert_eq!(forced, Some((0, 40 * frame)));
+        assert_eq!(state.segment_start, 40 * frame);
+        assert!(!state.has_speech);
+        assert_eq!(state.take_forced(50 * frame, cap), None);
     }
 }

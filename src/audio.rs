@@ -158,6 +158,20 @@ impl Recorder {
             .unwrap_or_default()
     }
 
+    /// Copies `from..to` (raw device-rate samples), clamped to what has been
+    /// captured. Live preview only needs the tail of the recording, so this
+    /// avoids copying the whole buffer every few hundred milliseconds.
+    pub fn snapshot_range(&self, from: usize, to: usize) -> Vec<f32> {
+        self.buffer
+            .lock()
+            .map(|guard| {
+                let end = to.min(guard.len());
+                let start = from.min(end);
+                guard[start..end].to_vec()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
