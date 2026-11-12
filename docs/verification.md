@@ -104,7 +104,8 @@ target/release/VoxKey-asr.exe  19,258,880 字节   （首次运行自动下载�
   正常收到点击；键盘注入仍会被应用自身的 `LLKHF_INJECTED` 过滤，因此测试用“模型目录缺失”触发下载胶囊，
   而不是模拟热键。
 - 渲染回归在 `WS_EX_LAYERED` 生效后单独验证：胶囊隐藏时窗口完全透明（桌面像素不变），说明分层窗口没有
-  破坏 DWM 的逐像素 alpha（winit 的 `DwmEnableBlurBehindWindow` 仍在起作用）。
+  破坏 DWM 的逐像素 alpha（winit 的 `DwmEnableBlurBehindWindow` 仍在起作用）。（0.2.5 起胶囊隐藏时
+  直接隐藏窗口，不再保留透明窗口，见下文“悬浮窗生命周期重构”。）
 
 发布后复测：下载 v0.2.4 Release 资产（`VoxKey.exe`，5,320,192 字节，SHA-256
 `e4d1372b…2c450be30`，与 Release 公布的摘要一致），用同一套脚本再跑一遍——扩展样式
