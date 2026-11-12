@@ -25,8 +25,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow,
     DispatchMessageW, FindWindowW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC,
     GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON,
-    HMENU, ICON_BIG, ICON_SMALL, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS,
-    IMAGE_ICON, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LWA_ALPHA, LoadCursorW, LoadIconW, LoadImageW,
+    HMENU, ICON_BIG, ICON_SMALL, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS, IMAGE_ICON,
+    IsWindowVisible, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LWA_ALPHA, LoadCursorW, LoadIconW, LoadImageW,
     MENU_ITEM_FLAGS, MSG, PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW,
     SM_CXICON, SM_CXSMICON, SPI_GETWORKAREA, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SetClassLongPtrW,
@@ -1042,6 +1042,13 @@ pub fn configure_overlay_window(hwnd: HWND) {
 pub fn foreground_window() -> Option<HWND> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.is_invalid() { None } else { Some(hwnd) }
+}
+
+/// Whether the OS currently shows `hwnd`. Used to tell the pass that *asked*
+/// for the overlay to become visible apart from the next pass that actually
+/// paints it: `ViewportCommand::Visible` is applied only after that pass ends.
+pub fn window_visible(hwnd: HWND) -> bool {
+    unsafe { IsWindowVisible(hwnd).as_bool() }
 }
 
 pub fn set_foreground_window(hwnd: HWND) {

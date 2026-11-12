@@ -110,3 +110,47 @@ target/release/VoxKey-asr.exe  19,258,880 字节   （首次运行自动下载�
 `e4d1372b…2c450be30`，与 Release 公布的摘要一致），用同一套脚本再跑一遍——扩展样式
 `0x80800B8`，`WindowFromPoint` 返回下方目标窗口，胶囊中心点击被目标窗口收到，说明 CI 产物与本地
 构建行为一致。CI 运行 [#43185132758](https://github.com/katriyda/VoxKey/actions/runs/43185132758) 全部通过。
+
+## 悬浮窗生命周期重构（2026-11-12，0.2.5）
+
+用户反馈：0.2.2–0.2.4 的悬浮窗“常驻可见但完全透明”，桌面在空闲时也一直存在一个不可见窗口；
+不用的时候应当直接隐藏。调研结论与实测如下。
+
+为什么之前常驻可见：0.2.2 为了绕开 eframe 0.32 的缺陷——`winit` 隐藏窗口在 Windows 上收不到跨线程
+重绘请求，空闲约 10 秒后第一次热键没有反应。仓库已升级到 eframe 0.37，它会为不可见窗口直接执行
+pass（`run.rs` 的 `is_invisible_or_minimized` 分支，emilk/egui#5229），因此这个绕法不再需要。
+
+改造中实测到的两个坑：
+
+1. **窗口必须以可见状态创建。** `with_visible(false)` 创建的透明窗口，后来 `ShowWindow` 也不会被
+   DWM 合成：`IsWindowVisible` 为真、分层与穿透样式正确、`App::ui` 以 alpha=1.0 持续绘制，但
+   GDI 屏幕截图上什么都看不到；同一份代码改为 `with_visible(true)` 创建即正常。窗口因此先创建为
+   可见，由 `VoxKeyApp::tick` 隐藏；并且在第一次隐藏前显式发送一次 `Visible(true)` 并绘制两帧
+   （`startup_frames`），否则之后的显示同样不会被合成。
+2. **不能在无事件循环上下文的 pass 里创建设置窗口。** 隐藏窗口的 pass 由
+   `check_redraw_requests` 直接绘制，`with_current_event_loop` 为空；在其中调用
+   `show_viewport_immediate` 会 panic：`egui backend is implemented incorrectly - the user
+   callback was never called`。现在 `open_settings` 只置 `pending_settings`，等
+   `platform::window_visible` 确认窗口真的可见后的下一个 pass 再创建。
+
+事件处理、动画推进与显示/隐藏决策移入 `App::logic`（`ui` 只绘制），因此隐藏期间热键/托盘事件仍会
+被处理。代价是 eframe 把不可见窗口的重绘请求节流到至少 100 ms，胶囊在按下热键后约 140–160 ms 出现
+（见 [known-limitations.md](known-limitations.md)）。
+
+实测（1024×768，Windows 11 26100，release 构建）：
+
+| 检查 | 结果 |
+| --- | --- |
+| 空闲 25 s | `IsWindowVisible=false`；`WindowFromPoint(512,640)` 返回其它进程窗口；6 s CPU 0.000 s |
+| 托盘的“打开模型目录”显示胶囊 | GDI 截图逐像素可见胶囊、文字与深色气泡；4 s 后 `Visible(false)` |
+| 隐藏 → 再次显示 | 正常合成，胶囊再次出现在屏幕上 |
+| 热键唤醒（测试构建临时去掉 `LLKHF_INJECTED` 过滤） | 159 ms 后窗口可见 |
+| 显示时鼠标穿透 | exstyle `0x80800B8`；`WindowFromPoint` 指向下层窗口；目标窗口收到 `MouseDown button=Left` |
+| 空闲隐藏态打开设置（托盘 WM_COMMAND 30） | 无 panic，设置窗口创建成功（`VoxKey 设置`，130,130–666,949） |
+| 关闭设置（WM_CLOSE） | 设置窗口消失，根窗口 3 s 内 `Visible(false)` |
+| `with_visible(false)` 对照实验 | 窗口可见且持续绘制，屏幕截图空白（见坑 1） |
+
+- 本会话没有可用的麦克风，引擎报“麦克风不可用”，因此录音内容未验证；热键唤醒用测试构建
+  （临时去掉注入键过滤）驱动，发布构建的过滤逻辑未改。
+- 像素证据用 GDI `CopyFromScreen` 采集：本机 MCP 的 pillow 截图不包含分层窗口，不能用它判断胶囊
+  是否在屏幕上（用它判断会得到相反的结论）。

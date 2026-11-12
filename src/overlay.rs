@@ -130,10 +130,11 @@ impl Overlay {
                 self.alpha = 0.0;
                 self.level = 0.0;
                 self.closing = false;
-                // The OS window now stays visible on purpose (transparent),
-                // so without clearing the text the fade-in branch below would
-                // start again on the next frame and leave the capsule stuck on
-                // screen forever.
+                // The window may still be visible here (the settings window
+                // keeps it alive, and `VoxKeyApp::tick` hides it only after
+                // this frame), so without clearing the text the fade-in
+                // branch below would start again on the next frame and leave
+                // the capsule stuck on screen forever.
                 self.title.clear();
                 self.detail.clear();
                 return true;

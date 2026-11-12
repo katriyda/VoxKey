@@ -55,11 +55,17 @@ fn main() {
             .with_resizable(false)
             .with_decorations(false)
             .with_transparent(true)
-            // Keep the window visible at all times. Hiding a winit window
-            // stops it from servicing cross-thread repaint requests on
-            // Windows, which made the first hotkey after a long idle period
-            // unreliable. The window is fully transparent and click-through
-            // while the capsule is not shown.
+            // The window is created visible and then hidden by
+            // `VoxKeyApp::tick` as soon as nothing needs it, so an idle VoxKey
+            // owns no window on the desktop at all.
+            //
+            // It must not be *created* hidden: a transparent window created
+            // with `visible(false)` is not composed by DWM even after a later
+            // `ShowWindow` - it reports `IsWindowVisible`, has the layered and
+            // click-through styles, paints every frame, and still shows
+            // nothing on screen (measured on Windows 11 26100). Created
+            // visible, the same window hides and re-shows normally, which is
+            // what `show_overlay_window` relies on.
             .with_visible(true)
             .with_active(false)
             .with_always_on_top()

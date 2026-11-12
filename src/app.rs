@@ -40,6 +40,10 @@ pub struct VoxKeyApp {
     overlay_configured: bool,
     overlay_hwnd_raw: Option<isize>,
     overlay_style_refresh: u8,
+    ui_ready: bool,
+    pending_width_fix: bool,
+    pending_settings: bool,
+    startup_frames: u8,
     previous_foreground: Option<isize>,
     configure_attempts: u32,
     show_settings: bool,
@@ -97,6 +101,10 @@ impl VoxKeyApp {
             overlay_configured: false,
             overlay_hwnd_raw: None,
             overlay_style_refresh: 0,
+            ui_ready: false,
+            pending_width_fix: false,
+            pending_settings: false,
+            startup_frames: 0,
             previous_foreground: None,
             configure_attempts: 0,
             show_settings: false,
@@ -245,13 +253,22 @@ impl VoxKeyApp {
     }
 
     fn open_settings(&mut self, ctx: &egui::Context) {
-        if !self.show_settings {
-            self.settings.reset_from(&self.config);
-            self.show_settings = true;
-            // A reopened settings viewport gets a brand new native window.
-            self.settings_icon_applied = false;
-        }
         self.focus_settings = true;
+        if self.show_settings || self.pending_settings {
+            ctx.request_repaint();
+            return;
+        }
+        self.settings.reset_from(&self.config);
+        // A reopened settings viewport gets a brand new native window.
+        self.settings_icon_applied = false;
+        // The settings window is a new winit viewport, and `eframe` can only
+        // create native windows during a pass that runs inside the event-loop
+        // context. Passes driven directly by eframe's repaint scheduling (the
+        // ones that keep a hidden window alive) do not have it, and creating a
+        // viewport there panics with "the user callback was never called".
+        // `App::ui` only runs for a visible window, whose passes come from
+        // `WM_PAINT`, so let it create the viewport on the next such pass.
+        self.pending_settings = true;
         ctx.request_repaint();
     }
 
@@ -884,75 +901,115 @@ impl VoxKeyApp {
         }
     }
 
-    fn update_overlay_window(&mut self, ctx: &egui::Context) {
-        let desired_width = self.overlay.desired_width(ctx);
-        if !self.overlay_os_visible {
-            self.overlay_width = desired_width;
-        } else {
-            self.overlay_width += (desired_width - self.overlay_width) * 0.28;
-        }
+    /// True while something in this app needs an OS window on screen: the
+    /// capsule, or the settings window (whose immediate viewport is rendered
+    /// by the root window's draw loop).
+    fn needs_window(&self) -> bool {
+        self.overlay.is_visible() || self.show_settings || self.pending_settings
+    }
 
-        if self.exiting {
+    /// Shows the overlay window at the capsule's final width and position.
+    ///
+    /// Called from [`eframe::App::logic`] right after the window was hidden;
+    /// [`eframe::App::ui`] paints on the next frame. Text metrics only exist
+    /// after the first egui pass of the process, so a show before that (the
+    /// startup notice) uses the current width and [`eframe::App::ui`] corrects
+    /// it as soon as it can measure the text.
+    fn show_overlay_window(&mut self, ctx: &egui::Context) {
+        let width = if self.ui_ready {
+            self.overlay.desired_width(ctx)
+        } else {
+            self.pending_width_fix = true;
+            self.overlay_width
+        };
+        self.overlay_width = width;
+        let (left, top, work_w, work_h) =
+            platform::primary_work_area().unwrap_or((0, 0, 1920, 1080));
+        let ppp = ctx.pixels_per_point();
+        let x = (left as f32 + (work_w as f32 - width * ppp) / 2.0) / ppp;
+        let y = (top + work_h) as f32 / ppp - WINDOW_HEIGHT - 34.0;
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(
+            width,
+            WINDOW_HEIGHT,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(x, y)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        self.previous_foreground = platform::foreground_window().map(|hwnd| hwnd.0 as isize);
+        self.overlay_style_refresh = 12;
+        self.overlay_os_visible = true;
+        self.overlay_sent_width = width;
+        ctx.request_repaint();
+    }
+
+    /// Tracks the capsule width while the window is on screen and resizes it.
+    fn update_overlay_window(&mut self, ctx: &egui::Context) {
+        if !self.overlay_os_visible {
             return;
         }
-
-        if self.overlay.is_visible() && !self.overlay_os_visible {
-            let (left, top, work_w, work_h) =
-                platform::primary_work_area().unwrap_or((0, 0, 1920, 1080));
-            let ppp = ctx.pixels_per_point();
-            let width = self.overlay_width;
-            let x = (left as f32 + (work_w as f32 - width * ppp) / 2.0) / ppp;
-            let y = (top + work_h) as f32 / ppp - WINDOW_HEIGHT - 34.0;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(
-                width,
-                WINDOW_HEIGHT,
-            )));
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(x, y)));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            self.previous_foreground = platform::foreground_window().map(|hwnd| hwnd.0 as isize);
-            self.overlay_style_refresh = 12;
-            self.overlay_os_visible = true;
-            self.overlay_sent_width = width;
-            ctx.request_repaint();
-        } else if self.overlay_os_visible
-            && (self.overlay_width - self.overlay_sent_width).abs() > 1.0
-        {
-            let (left, top, work_w, work_h) =
-                platform::primary_work_area().unwrap_or((0, 0, 1920, 1080));
-            let ppp = ctx.pixels_per_point();
-            let width = self.overlay_width;
-            let x = (left as f32 + (work_w as f32 - width * ppp) / 2.0) / ppp;
-            let y = (top + work_h) as f32 / ppp - WINDOW_HEIGHT - 34.0;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(
-                width,
-                WINDOW_HEIGHT,
-            )));
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(x, y)));
-            self.overlay_sent_width = width;
-            ctx.request_repaint();
+        let desired_width = self.overlay.desired_width(ctx);
+        self.overlay_width += (desired_width - self.overlay_width) * 0.28;
+        if (self.overlay_width - self.overlay_sent_width).abs() <= 1.0 {
+            return;
         }
+        let (left, top, work_w, work_h) =
+            platform::primary_work_area().unwrap_or((0, 0, 1920, 1080));
+        let ppp = ctx.pixels_per_point();
+        let width = self.overlay_width;
+        let x = (left as f32 + (work_w as f32 - width * ppp) / 2.0) / ppp;
+        let y = (top + work_h) as f32 / ppp - WINDOW_HEIGHT - 34.0;
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(
+            width,
+            WINDOW_HEIGHT,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(x, y)));
+        self.overlay_sent_width = width;
+        ctx.request_repaint();
     }
-}
 
-impl eframe::App for VoxKeyApp {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
+    /// Per-frame state updates. Runs for every frame, and also while the
+    /// overlay window is hidden: `eframe` calls [`eframe::App::logic`] (which
+    /// in turn calls this) without running an egui pass.
+    fn tick(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().clamp(0.0, 0.05);
         self.last_frame = now;
 
-        self.configure_overlay(&ctx, frame);
-        self.process_events(&ctx);
-        if self.exiting {
-            return;
+        self.overlay.advance(dt);
+
+        // eframe creates the window visible (see `main.rs`), so the first pass
+        // finds an OS window that is shown without our `Visible(true)` command.
+        // Adopt it explicitly and keep it painted for two frames: a layered
+        // window that is hidden before Windows ever composed it stays
+        // invisible on every later show (measured), while this show/paint/
+        // hide sequence keeps hide → re-show working.
+        if !self.overlay_os_visible {
+            let visible = self.overlay_hwnd_raw.is_some_and(|raw| {
+                platform::window_visible(windows::Win32::Foundation::HWND(
+                    raw as *mut std::ffi::c_void,
+                ))
+            });
+            if visible {
+                self.overlay_os_visible = true;
+                self.overlay_style_refresh = 12;
+                self.startup_frames = 2;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.request_repaint();
+            }
         }
 
-        let closed = self.overlay.advance(dt);
-        if closed && self.overlay_os_visible {
-            // The OS window stays visible (and fully transparent) so winit
-            // keeps processing hotkey repaint requests. Only the capsule
-            // content is hidden.
-            self.previous_foreground = None;
+        // The window is hidden whenever nothing needs to be shown: a hidden
+        // window is not composited, is not hit-tested and keeps no pixels over
+        // the desktop. Every hide has to be asked for explicitly.
+        if self.overlay_os_visible && !self.needs_window() {
+            if self.startup_frames > 0 {
+                self.startup_frames -= 1;
+                ctx.request_repaint();
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.overlay_os_visible = false;
+                self.overlay_style_refresh = 0;
+                self.previous_foreground = None;
+            }
         }
 
         // winit may rewrite extended window styles when it shows the window.
@@ -974,11 +1031,73 @@ impl eframe::App for VoxKeyApp {
             self.overlay_style_refresh = self.overlay_style_refresh.saturating_sub(1);
         }
 
+        if self.overlay.is_visible() {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+        if self.overlay.is_fading() || self.show_settings {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
+    }
+}
+
+impl eframe::App for VoxKeyApp {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.configure_overlay(ctx, frame);
+        self.process_events(ctx);
+        if self.exiting {
+            return;
+        }
+
+        self.tick(ctx);
+
+        // A hidden window is never composed, never hit-tested and keeps no
+        // pixels over the desktop, so it is only shown while the capsule (or
+        // the settings window that the root window draws) has to be visible.
+        // Showing it here also un-throttles the repaint that follows: eframe
+        // delays repaint requests for invisible windows by up to 100 ms.
+        if !self.overlay_os_visible && self.needs_window() {
+            self.show_overlay_window(ctx);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.ui_ready = true;
+        if self.exiting {
+            return;
+        }
+
+        // The first window of a process had no text metrics when it was shown
+        // (see `show_overlay_window`); snap it to the measured width now, so
+        // the capsule does not visibly grow from the placeholder size.
+        if self.pending_width_fix {
+            self.pending_width_fix = false;
+            if self.overlay_os_visible {
+                self.overlay_width = self.overlay.desired_width(&ctx);
+            }
+        }
+
+        // Create the settings viewport only from a pass of an already visible
+        // window: see `open_settings` for why a pass without the event-loop
+        // context must not do it. The pass that sends `Visible(true)` still
+        // sees the window hidden (`ViewportCommand`s are applied afterwards),
+        // so ask the OS instead of trusting our own bookkeeping.
+        if self.pending_settings {
+            let visible = self.overlay_hwnd_raw.is_some_and(|raw| {
+                platform::window_visible(windows::Win32::Foundation::HWND(
+                    raw as *mut std::ffi::c_void,
+                ))
+            });
+            if visible {
+                self.pending_settings = false;
+                self.show_settings = true;
+            }
+        }
+
         self.update_overlay_window(&ctx);
 
         if self.overlay.is_visible() {
             self.overlay.render(ui);
-            ctx.request_repaint_after(Duration::from_millis(16));
         }
 
         if self.show_settings {
@@ -1016,10 +1135,6 @@ impl eframe::App for VoxKeyApp {
             if self.update.checking || self.update.downloading {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
-        }
-
-        if self.overlay.is_fading() || self.show_settings {
-            ctx.request_repaint_after(Duration::from_millis(33));
         }
     }
 
