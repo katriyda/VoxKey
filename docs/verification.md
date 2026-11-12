@@ -105,3 +105,8 @@ target/release/VoxKey-asr.exe  19,258,880 字节   （首次运行自动下载�
   而不是模拟热键。
 - 渲染回归在 `WS_EX_LAYERED` 生效后单独验证：胶囊隐藏时窗口完全透明（桌面像素不变），说明分层窗口没有
   破坏 DWM 的逐像素 alpha（winit 的 `DwmEnableBlurBehindWindow` 仍在起作用）。
+
+发布后复测：下载 v0.2.4 Release 资产（`VoxKey.exe`，5,320,192 字节，SHA-256
+`e4d1372b…2c450be30`，与 Release 公布的摘要一致），用同一套脚本再跑一遍——扩展样式
+`0x80800B8`，`WindowFromPoint` 返回下方目标窗口，胶囊中心点击被目标窗口收到，说明 CI 产物与本地
+构建行为一致。CI 运行 [#43185132758](https://github.com/katriyda/VoxKey/actions/runs/43185132758) 全部通过。
