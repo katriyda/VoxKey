@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
 use windows::Win32::Foundation::{
-    GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    COLORREF, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DWMNCRENDERINGPOLICY, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
@@ -25,17 +25,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow,
     DispatchMessageW, FindWindowW, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC,
     GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON,
-    HMENU, HTTRANSPARENT, ICON_BIG, ICON_SMALL, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS,
-    IMAGE_ICON, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LoadCursorW, LoadIconW, LoadImageW,
+    HMENU, ICON_BIG, ICON_SMALL, IDC_ARROW, IDI_APPLICATION, IMAGE_FLAGS,
+    IMAGE_ICON, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LWA_ALPHA, LoadCursorW, LoadIconW, LoadImageW,
     MENU_ITEM_FLAGS, MSG, PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW,
     SM_CXICON, SM_CXSMICON, SPI_GETWORKAREA, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SetClassLongPtrW,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, SystemParametersInfoW,
+    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
+    SetWindowsHookExW, SystemParametersInfoW,
     TRACK_POPUP_MENU_FLAGS, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
-    WM_NCCALCSIZE, WM_NCHITTEST,
-    WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SETICON, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC,
-    WS_CAPTION, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
+    WM_NCCALCSIZE, WM_NULL, WM_QUIT, WM_RBUTTONUP, WM_SETICON,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WNDPROC, WS_CAPTION, WS_EX_APPWINDOW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
     WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::PCWSTR;
@@ -915,10 +916,9 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 static PREVIOUS_OVERLAY_PROC: std::sync::atomic::AtomicIsize =
     std::sync::atomic::AtomicIsize::new(0);
 
-/// Reports `HTTRANSPARENT` for every hit test so the desktop under the capsule
-/// keeps receiving clicks. A `WS_EX_LAYERED` + `WS_EX_TRANSPARENT` pair would
-/// do the same, but winit sets `WS_EX_LAYERED` without layered attributes,
-/// which stops the capsule from being composited on screen at all.
+/// The overlay never takes input; `configure_overlay_window` marks it
+/// `WS_EX_LAYERED | WS_EX_TRANSPARENT` so clicks reach whatever is underneath,
+/// including windows owned by other processes.
 ///
 /// It also claims the whole window as client area (`WM_NCCALCSIZE`): Windows 11
 /// reserves a one pixel non-client strip along the top of the frame and paints
@@ -933,9 +933,6 @@ unsafe extern "system" fn overlay_window_proc(
 ) -> LRESULT {
     if msg == WM_NCCALCSIZE && wparam.0 != 0 {
         return LRESULT(0);
-    }
-    if msg == WM_NCHITTEST {
-        return LRESULT(HTTRANSPARENT as isize);
     }
     let previous = PREVIOUS_OVERLAY_PROC.load(Ordering::Relaxed);
     if previous == 0 {
@@ -962,7 +959,11 @@ pub fn configure_overlay_window(hwnd: HWND) {
             }
         }
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let new_style = (style | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize))
+        let new_style = (style
+            | (WS_EX_NOACTIVATE.0 as isize)
+            | (WS_EX_TOOLWINDOW.0 as isize)
+            | (WS_EX_LAYERED.0 as isize)
+            | (WS_EX_TRANSPARENT.0 as isize))
             & !(WS_EX_APPWINDOW.0 as isize);
         if new_style != style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
@@ -976,6 +977,14 @@ pub fn configure_overlay_window(hwnd: HWND) {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
             );
         }
+
+        // `WS_EX_TRANSPARENT` is only honoured by hit testing on layered
+        // windows, so the pair above makes every click over the overlay fall
+        // through to whatever is underneath. A layered window without layered
+        // attributes is never composited — the mistake documented in
+        // `docs/architecture.md` — hence this call, which keeps the ordinary
+        // per-pixel alpha surface (DWM blur-behind) on screen.
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
 
         // winit/eframe can end up creating the overlay as a decorated
         // overlapped window (caption + thick frame + system menu). That leaves

@@ -4,7 +4,7 @@ resolver = "3"
 
 [package]
 name = "voxkey"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.95"
 description = "Hold-to-talk, local-first voice input for Windows"

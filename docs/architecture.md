@@ -45,5 +45,7 @@ build.rs           Win32 资源：图标、VERSIONINFO、asInvoker 清单（调�
 ## 悬浮窗窗口约束
 
 - OS 窗口常驻可见，但胶囊内容隐藏时窗口完全透明。这是为了避开 winit 隐藏窗口在 Windows 上不再响应跨线程重绘请求的问题；否则应用空闲约 10 秒后第一次按热键可能没有反应。
-- 鼠标穿透由窗口过程在 `WM_NCHITTEST` 中返回 `HTTRANSPARENT` 实现（`platform::overlay_window_proc`）。**不要**改回 eframe 的 `with_mouse_passthrough(true)`：winit 会为此设置 `WS_EX_LAYERED` 却不调用 `SetLayeredWindowAttributes`/`UpdateLayeredWindow`，结果是窗口仍有正确尺寸与内容（`PrintWindow` 能看到胶囊），但桌面合成器完全不绘制它——悬浮窗在屏幕上彻底不可见，波浪动画与实时预览文字也就永远看不到。
+- 鼠标穿透由扩展样式 `WS_EX_LAYERED | WS_EX_TRANSPARENT` 加 `SetLayeredWindowAttributes(..., 255, LWA_ALPHA)` 实现（`platform::configure_overlay_window`）。
+  - **不要**退回窗口过程里返回 `HTTRANSPARENT` 的写法：系统只把鼠标消息交给同一线程内下方的窗口，其他进程的窗口（桌面、资源管理器、用户正在操作的任何程序）永远收不到落在悬浮窗上的点击，用户看到的是“胶囊被一层透明的东西挡住，点不穿”。`WS_EX_TRANSPARENT` 的命中测试跳过依赖分层窗口，所以这两个样式必须成对设置。
+  - **不要**直接用 eframe 的 `with_mouse_passthrough(true)` 而不同时设置分层属性：winit 会加 `WS_EX_LAYERED` 却不调用 `SetLayeredWindowAttributes`/`UpdateLayeredWindow`，结果是窗口仍有正确尺寸与内容（`PrintWindow` 能看到胶囊），但桌面合成器完全不绘制它——悬浮窗在屏幕上彻底不可见，波浪动画与实时预览文字也就永远看不到。本仓库手动设置样式并补上分层属性后，上述合成问题不再出现（胶囊隐藏时窗口区域与桌面逐像素一致，显示时胶囊正常绘制）。
 - 相关排查记录见 [verification.md](verification.md)。
