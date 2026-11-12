@@ -50,7 +50,7 @@ a8d1e2bc9b6d335c783b5398b523465c11f481905abe93ec037b0c4f6670f591
 
 根因：`main.rs` 里的 `with_mouse_passthrough(true)` 会让 winit 给窗口加上 `WS_EX_LAYERED`（`window_state.rs` 中 `IGNORE_CURSOR_EVENT` 分支），却从不设置 layered 属性。一个没有属性的 layered 窗口不会被合成，窗口存在、内容在渲染、`IsWindowVisible` 为真，但屏幕上什么都看不到。
 
-修复：去掉 `with_mouse_passthrough`，改为在窗口过程里对 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，既保留真实的逐像素透明（DWM blur-behind），又保持鼠标穿透。
+修复：去掉 `with_mouse_passthrough`，改为在窗口过程里对 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，既保留真实的逐像素透明（DWM blur-behind），又保持鼠标穿透。（该穿透只对同一线程内的窗口有效，对其他进程的窗口无效；完整修复见下文“悬浮窗鼠标穿透修复”。）
 
 ## 体积优化：UI 与引擎拆分（2026-11-11）
 
